@@ -30,7 +30,12 @@ import {
   type Lt900Phase,
 } from "@/lib/lt900-protocol";
 import type { DecodedNidekTrace } from "@/lib/nidek-native";
-import { buildOmaFiles, type OmaFile } from "@/lib/oma";
+import {
+  buildOmaFiles,
+  freshJobName,
+  type OmaFile,
+  type OmaJobInfo,
+} from "@/lib/oma";
 import {
   type SerialLogEntry,
   WebSerialTransport,
@@ -74,7 +79,17 @@ export function App() {
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [trace, setTrace] = useState<DecodedNidekTrace | null>(null);
-  const [omaFiles, setOmaFiles] = useState<OmaFile[]>([]);
+  const [jobInfo, setJobInfo] = useState<OmaJobInfo>({
+    job: "",
+    ven: "",
+    model: "",
+    wrapang: "",
+    panto: "",
+  });
+  const omaFiles = useMemo(
+    () => (trace ? buildOmaFiles(trace, jobInfo) : []),
+    [trace, jobInfo],
+  );
   const [busy, setBusy] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [logExpanded, setLogExpanded] = useState(false);
@@ -211,7 +226,6 @@ export function App() {
     setBusy(true);
     setError(null);
     setTrace(null);
-    setOmaFiles([]);
     setProgress(0);
     setPhase("handshake");
     setStatusText("Starting trace read sequence.");
@@ -238,8 +252,8 @@ export function App() {
           .join(" "),
       );
       console.groupEnd();
+      setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
       setTrace(result.trace);
-      setOmaFiles(buildOmaFiles(result.trace));
     } catch (traceError) {
       const message = messageFromError(traceError);
       setError({ title: "Trace failed", message });
@@ -253,7 +267,6 @@ export function App() {
 
   const resetTrace = () => {
     setTrace(null);
-    setOmaFiles([]);
     setError(null);
     setPhase("idle");
     setProgress(0);
@@ -452,17 +465,101 @@ export function App() {
         ) : null}
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-          <Card>
-            <CardHeader>
-              <CardTitle>Preview</CardTitle>
-              <CardDescription>
-                Decoded shape and trace measurements from the latest capture.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <TracePreview trace={trace} isLoading={isActivePhase} />
-            </CardContent>
-          </Card>
+          <div className="flex flex-col gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Preview</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TracePreview trace={trace} isLoading={isActivePhase} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Frame details</CardTitle>
+                <CardDescription>
+                  Optional metadata written into the OMA file.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="oma-ven"
+                      className="text-sm font-medium"
+                    >
+                      Brand
+                    </label>
+                    <input
+                      id="oma-ven"
+                      value={jobInfo.ven}
+                      onChange={(e) =>
+                        setJobInfo((p) => ({ ...p, ven: e.target.value }))
+                      }
+                      placeholder="e.g. Ray-Ban"
+                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="oma-model"
+                      className="text-sm font-medium"
+                    >
+                      Model
+                    </label>
+                    <input
+                      id="oma-model"
+                      value={jobInfo.model}
+                      onChange={(e) =>
+                        setJobInfo((p) => ({ ...p, model: e.target.value }))
+                      }
+                      placeholder="e.g. RB3025"
+                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="oma-wrapang"
+                      className="text-sm font-medium"
+                    >
+                      Wrap angle (°)
+                    </label>
+                    <input
+                      id="oma-wrapang"
+                      type="number"
+                      step="0.1"
+                      value={jobInfo.wrapang}
+                      onChange={(e) =>
+                        setJobInfo((p) => ({ ...p, wrapang: e.target.value }))
+                      }
+                      placeholder="e.g. 5.0"
+                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="oma-panto"
+                      className="text-sm font-medium"
+                    >
+                      Pantoscopic tilt (°)
+                    </label>
+                    <input
+                      id="oma-panto"
+                      type="number"
+                      step="0.1"
+                      value={jobInfo.panto}
+                      onChange={(e) =>
+                        setJobInfo((p) => ({ ...p, panto: e.target.value }))
+                      }
+                      placeholder="e.g. 8.0"
+                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
           <div className="space-y-6">
             <Card>
@@ -492,6 +589,28 @@ export function App() {
                 )}
 
                 <div className="space-y-2">
+                  {primaryOma && (
+                    <div className="space-y-1">
+                      <label
+                        htmlFor="oma-job"
+                        className="text-xs font-medium text-muted-foreground"
+                      >
+                        File name
+                      </label>
+                      <input
+                        id="oma-job"
+                        value={jobInfo.job}
+                        onChange={(e) =>
+                          setJobInfo((p) => ({ ...p, job: e.target.value }))
+                        }
+                        className="w-full rounded-md border bg-background px-3 py-1.5 font-mono text-xs"
+                        spellCheck={false}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Saved as <span className="font-mono">{jobInfo.job}_400.oma</span>
+                      </p>
+                    </div>
+                  )}
                   <div className="relative" ref={downloadMenuRef}>
                     <div className="flex">
                       <Button
