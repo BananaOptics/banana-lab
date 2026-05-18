@@ -39,9 +39,9 @@ export function buildOmaContent(trace: DecodedNidekTrace, pointCount: OmaPointCo
     `DBL=${formatNumber(trace.metadata.dblMm, 2)}`,
     `CIRC=${formatNumber(trace.stats.circMm, 2)}`,
     `FCRV=${formatNumber(trace.metadata.fcrv, 1)}`,
-    `TRCFMT=1;${pointCount};E;R;${trace.metadata.side}`,
-    ...(trace.metadata.side === "R" || trace.metadata.side === "B" ? [`R=${radii.join(";")}`] : []),
-    ...(trace.metadata.side === "L" || trace.metadata.side === "B" ? [`L=${radii.join(";")}`] : []),
+    `TRCFMT=1;${pointCount};E;R;${trace.metadata.dblMm > 0 ? "B" : trace.metadata.side}`,
+    ...(trace.metadata.side === "R" || trace.metadata.side === "B" || trace.metadata.dblMm > 0 ? [`R=${radii.join(";")}`] : []),
+    ...(trace.metadata.side === "L" || trace.metadata.side === "B" || trace.metadata.dblMm > 0 ? [`L=${radii.join(";")}`] : []),
   ];
 
   return `${lines.join("\r\n")}\r\n`;
