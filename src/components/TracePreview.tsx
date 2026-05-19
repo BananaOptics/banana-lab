@@ -142,14 +142,6 @@ export function TracePreview({ trace, drillRecords = [], invalidDrillRecordIds =
         </svg>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Metric label="Captured side" field="Side" value={{ R: "Right lens", L: "Left lens", B: "Both lenses" }[metadata.side] ?? metadata.side} />
-        <Metric label="Lens width" field="HBOX" value={`${formatNumber(stats.hboxMm, 2)} mm`} />
-        <Metric label="Lens height" field="VBOX" value={`${formatNumber(stats.vboxMm, 2)} mm`} />
-        <Metric label="Bridge distance" field="DBL" value={`${formatNumber(metadata.dblMm, 2)} mm`} />
-        <Metric label="Circumference" field="CIRC" value={`${formatNumber(stats.circMm, 2)} mm`} />
-        <Metric label="Base curve" field="FCRV" value={formatNumber(metadata.fcrv, 1)} />
-      </div>
     </div>
   );
 }
@@ -402,18 +394,6 @@ function DblBoxAnnotation({
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function Metric({ label, field, value }: { label: string; field: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-background px-3 py-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="text-xs font-medium tracking-normal text-foreground">{label}</div>
-        <div className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</div>
-      </div>
-      <div className="mt-1 text-sm font-semibold">{value}</div>
-    </div>
-  );
 }
 
 function buildSvgPath(points: { x: number; y: number }[]): { path: string; scale: number } {

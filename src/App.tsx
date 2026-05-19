@@ -44,6 +44,7 @@ import {
 } from "@/lib/oma";
 import { buildSimulatedNidekTrace } from "@/lib/simulated-trace";
 import {
+  formatNumber,
   mirrorClosedRadiiHorizontally,
   pointIsInsideClosedTrace,
 } from "@/lib/trace-geometry";
@@ -144,15 +145,28 @@ export function App() {
   });
   const [drillRecords, setDrillRecords] = useState<DrillRecord[]>([]);
   const [drillDialogOpen, setDrillDialogOpen] = useState(false);
-  const pairPreviewTrace = useMemo(() => {
-    if (!trace || !showAsPair || trace.metadata.side === "B") return null;
+  const previewTrace = useMemo(() => {
+    if (!trace) return null;
+
+    const metadata = {
+      ...trace.metadata,
+      dblMm: pairDblMm,
+      centerDistanceMm: trace.stats.hboxMm + pairDblMm,
+    };
+
+    if (trace.metadata.side === "B") {
+      return { ...trace, metadata };
+    }
+
+    if (!showAsPair) return trace;
+
     // buildTwoLensPaths always uses radii400 as the right-lens template and mirrors for left.
     // If we captured the left side, mirror first so the geometry comes out correct.
     const radii400 =
       trace.metadata.side === "L"
         ? mirrorClosedRadiiHorizontally(trace.radii400)
         : trace.radii400;
-    return { ...trace, radii400, metadata: { ...trace.metadata, dblMm: pairDblMm } };
+    return { ...trace, radii400, metadata };
   }, [trace, showAsPair, pairDblMm]);
   const invalidDrillRecordIds = useMemo(() => {
     if (!trace) return new Set<string>();
@@ -170,15 +184,9 @@ export function App() {
   const omaFiles = useMemo(
     () => {
       if (!trace) return [];
-      // For single-lens traces, use pairDblMm as the OMA DBL when the user has
-      // entered it (showAsPair enables the DBL input). This ensures the bridge
-      // distance appears in the file for rimless/frameless ordering.
-      const dblOverride = (showAsPair && trace.metadata.side !== "B" && pairDblMm > 0)
-        ? pairDblMm
-        : undefined;
-      return buildOmaFiles(trace, jobInfo, drillRecords, dblOverride);
+      return buildOmaFiles(trace, jobInfo, drillRecords, pairDblMm);
     },
-    [trace, jobInfo, drillRecords, showAsPair, pairDblMm],
+    [trace, jobInfo, drillRecords, pairDblMm],
   );
   const [busy, setBusy] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
@@ -277,6 +285,18 @@ export function App() {
     const id = logIdRef.current;
     logIdRef.current += 1;
     setLogs((current) => [...current, { id, ...entry }].slice(-80));
+  };
+
+  const setEditableDblFromTrace = (nextTrace: DecodedNidekTrace) => {
+    const dbl = nextTrace.metadata.dblMm > 0 ? nextTrace.metadata.dblMm : 18;
+    setPairDblMm(dbl);
+    setPairDblInput(String(dbl));
+  };
+
+  const updateEditableDbl = (value: string) => {
+    setPairDblInput(value);
+    const n = parseFloat(value);
+    if (Number.isFinite(n) && n >= 0) setPairDblMm(n);
   };
 
   const handleSerialLog = (entry: SerialLogEntry) => {
@@ -399,6 +419,7 @@ export function App() {
         });
       }
       setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
+      setEditableDblFromTrace(result.trace);
       setTrace(result.trace);
       setShowAsPair(result.trace.metadata.side !== "B");
       setDocumentSource({ type: "tracer", label: "Captured trace" });
@@ -427,6 +448,7 @@ export function App() {
     setProgress(100);
     setStatusText("Simulated trace loaded.");
     setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
+    setEditableDblFromTrace(simulatedTrace);
     setTrace(simulatedTrace);
     setShowAsPair(simulatedTrace.metadata.side !== "B");
     setDocumentSource({ type: "tracer", label: "Simulated trace" });
@@ -469,8 +491,7 @@ export function App() {
       setJobInfo(parsed.jobInfo);
       setDrillRecords(parsed.drillRecords);
       setShowAsPair(parsed.trace.metadata.side !== "B");
-      setPairDblMm(parsed.trace.metadata.dblMm || 18);
-      setPairDblInput(String(parsed.trace.metadata.dblMm || 18));
+      setEditableDblFromTrace(parsed.trace);
       setDocumentSource({ type: "oma", label: parsed.fileName });
       setOmaWarnings(parsed.warnings);
       setPhase("complete");
@@ -718,28 +739,8 @@ export function App() {
                       1:1
                     </button>
                   </div>
-                  {workflow === "editor" && trace && trace.metadata.side !== "B" && trace.metadata.dblMm === 0 && (
+                  {workflow === "editor" && trace && trace.metadata.side !== "B" && (
                     <>
-                      {showAsPair && (
-                        <div className="flex items-center gap-1.5">
-                          <label htmlFor="pair-dbl" className="text-xs text-muted-foreground whitespace-nowrap">
-                            DBL
-                          </label>
-                          <input
-                            id="pair-dbl"
-                            type="text"
-                            inputMode="decimal"
-                            value={pairDblInput}
-                            onChange={(e) => {
-                              setPairDblInput(e.target.value);
-                              const n = parseFloat(e.target.value);
-                              if (!isNaN(n) && n >= 0) setPairDblMm(n);
-                            }}
-                            className="w-16 rounded-md border bg-background px-2 py-1 text-sm"
-                          />
-                          <span className="text-xs text-muted-foreground">mm</span>
-                        </div>
-                      )}
                       <Button
                         variant={showAsPair ? "secondary" : "outline"}
                         size="sm"
@@ -753,7 +754,7 @@ export function App() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <TracePreview
-                  trace={pairPreviewTrace ?? trace}
+                  trace={previewTrace}
                   drillRecords={drillRecords}
                   invalidDrillRecordIds={invalidDrillRecordIds}
                   isLoading={isActivePhase}
@@ -799,11 +800,56 @@ export function App() {
               <CardHeader>
                 <CardTitle>Frame details</CardTitle>
                 <CardDescription>
-                  Optional metadata written into the OMA file.
+                  Frame measurements and metadata written into the OMA file.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  {trace && (
+                    <>
+                      <FrameReadout
+                        label="Captured side"
+                        field="Side"
+                        value={{ R: "Right lens", L: "Left lens", B: "Both lenses" }[trace.metadata.side] ?? trace.metadata.side}
+                      />
+                      <FrameReadout
+                        label="Lens width"
+                        field="HBOX"
+                        value={`${formatNumber(trace.stats.hboxMm, 2)} mm`}
+                      />
+                      <FrameReadout
+                        label="Lens height"
+                        field="VBOX"
+                        value={`${formatNumber(trace.stats.vboxMm, 2)} mm`}
+                      />
+                      <div className="space-y-1.5">
+                        <FieldLabel htmlFor="frame-dbl" label="Bridge distance" field="DBL" />
+                        <div className="relative">
+                          <input
+                            id="frame-dbl"
+                            type="text"
+                            inputMode="decimal"
+                            value={pairDblInput}
+                            onChange={(e) => updateEditableDbl(e.target.value)}
+                            className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm"
+                          />
+                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                            mm
+                          </span>
+                        </div>
+                      </div>
+                      <FrameReadout
+                        label="Circumference"
+                        field="CIRC"
+                        value={`${formatNumber(trace.stats.circMm, 2)} mm`}
+                      />
+                      <FrameReadout
+                        label="Base curve"
+                        field="FCRV"
+                        value={formatNumber(trace.metadata.fcrv, 1)}
+                      />
+                    </>
+                  )}
                   <div className="space-y-1.5">
                     <FieldLabel htmlFor="oma-ven" label="Frame brand" field="VEN" />
                     <input
@@ -1242,6 +1288,20 @@ function FieldLabel({ htmlFor, label, field }: { htmlFor: string; label: string;
       <span>{label}</span>
       <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</span>
     </label>
+  );
+}
+
+function FrameReadout({ label, field, value }: { label: string; field: string; value: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2 text-sm font-medium">
+        <span>{label}</span>
+        <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</span>
+      </div>
+      <div className="rounded-md border bg-muted/30 px-3 py-1.5 text-sm font-medium text-muted-foreground">
+        {value}
+      </div>
+    </div>
   );
 }
 
