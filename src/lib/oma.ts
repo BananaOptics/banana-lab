@@ -2,6 +2,8 @@ import type { DecodedNidekTrace } from "@/lib/nidek-native";
 import {
   formatNumber,
   mirrorClosedRadiiHorizontally,
+  resampleClosedRadii,
+  summarizeRadii,
 } from "@/lib/trace-geometry";
 
 export type OmaPointCount = 400 | 1000;
@@ -38,8 +40,98 @@ export interface OmaJobInfo {
   panto: string;
 }
 
+export interface ParsedOmaDocument {
+  fileName: string;
+  jobInfo: OmaJobInfo;
+  trace: DecodedNidekTrace;
+  drillRecords: DrillRecord[];
+  pointCount: OmaPointCount;
+  warnings: string[];
+}
+
 export function freshJobName(): string {
   return `trace_${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+export function parseOmaContent(content: string, fileName: string): ParsedOmaDocument {
+  const records = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const eq = line.indexOf("=");
+      if (eq === -1) return { key: line.toUpperCase(), value: "" };
+      return {
+        key: line.slice(0, eq).trim().toUpperCase(),
+        value: line.slice(eq + 1).trim(),
+      };
+    });
+
+  const firstValue = (key: string) =>
+    records.find((record) => record.key === key)?.value ?? "";
+  const radiiRecord = firstValue("R") || firstValue("L");
+
+  if (!radiiRecord) {
+    throw new Error("The OMA file does not contain an R= or L= trace record.");
+  }
+
+  const sourceRadii = parseRadiiRecord(radiiRecord);
+  const pointCount = normalizePointCount(
+    parseInt(firstValue("TRCFMT").split(";")[1] ?? String(sourceRadii.length), 10),
+    sourceRadii.length,
+  );
+  const radii1000 =
+    sourceRadii.length === 1000 ? sourceRadii : resampleClosedRadii(sourceRadii, 1000);
+  const radii400 =
+    sourceRadii.length === 400 ? sourceRadii : resampleClosedRadii(sourceRadii, 400);
+  const stats = summarizeRadii(radii1000);
+  const dblMm = parseOptionalNumber(firstValue("DBL")) ?? 0;
+  const fcrv = parseOptionalNumber(firstValue("FCRV")) ?? 0;
+  const warnings: string[] = [];
+  const right = parseMaybeRadii(firstValue("R"));
+  const left = parseMaybeRadii(firstValue("L"));
+  const side = left && !right ? "L" : dblMm > 0 ? "B" : "R";
+
+  if (right && left && !radiiAreMirrored(right, left)) {
+    warnings.push(
+      "This OMA has independent R/L trace records. The editor currently uses one shape and mirrors it on export.",
+    );
+  }
+
+  const trace: DecodedNidekTrace = {
+    rawFrame: new Uint8Array(),
+    cleanFrame: new Uint8Array(),
+    radii1000,
+    radii400,
+    metadata: {
+      frameType: dblMm > 0 ? "full" : "partial",
+      side,
+      encoding: "native",
+      fcrv,
+      centerDistanceMm: stats.hboxMm + dblMm,
+      dblMm,
+      byte2Raw: 0,
+    },
+    stats,
+  };
+
+  return {
+    fileName,
+    jobInfo: {
+      job: firstValue("JOB") || stripOmaExtension(fileName) || freshJobName(),
+      ven: firstValue("VEN"),
+      model: firstValue("MODEL"),
+      wrapang: firstValue("WRAPANG"),
+      panto: firstValue("PANTO"),
+    },
+    trace,
+    drillRecords: records
+      .filter((record) => record.key === "DRILLE")
+      .map((record, index) => parseDrillRecord(record.value, index))
+      .filter((record): record is DrillRecord => record !== null),
+    pointCount,
+    warnings,
+  };
 }
 
 export function buildOmaFiles(
@@ -131,4 +223,73 @@ function formatDrillRecord(r: DrillRecord): string {
     formatNumber(r.x2, 2),
     formatNumber(r.y2, 2),
   ].join(";")}`;
+}
+
+function parseRadiiRecord(value: string) {
+  const radii = value
+    .split(";")
+    .map((part) => parseInt(part.trim(), 10))
+    .filter((n) => Number.isFinite(n));
+
+  if (radii.length < 32) {
+    throw new Error(`The OMA trace record has too few points (${radii.length}).`);
+  }
+
+  return radii;
+}
+
+function parseMaybeRadii(value: string) {
+  if (!value) return null;
+  try {
+    return parseRadiiRecord(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizePointCount(value: number, fallback: number): OmaPointCount {
+  if (value === 400 || value === 1000) return value;
+  if (fallback === 400 || fallback === 1000) return fallback;
+  return fallback < 700 ? 400 : 1000;
+}
+
+function parseOptionalNumber(value: string) {
+  if (!value) return undefined;
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function parseDrillRecord(value: string, index: number): DrillRecord | null {
+  const parts = value.split(";").map((part) => part.trim());
+  const eye = parts[0] === "R" || parts[0] === "L" || parts[0] === "B" ? parts[0] : "B";
+  const reference = parts[1] === "C" ? parts[1] : "C";
+  const x1 = parseFloat(parts[2]);
+  const y1 = parseFloat(parts[3]);
+  const diameter = parseFloat(parts[4]);
+  const x2 = parts[5] ? parseFloat(parts[5]) : null;
+  const y2 = parts[6] ? parseFloat(parts[6]) : null;
+
+  if (![x1, y1, diameter].every(Number.isFinite)) return null;
+  if ((x2 !== null && !Number.isFinite(x2)) || (y2 !== null && !Number.isFinite(y2))) return null;
+
+  return {
+    id: `oma-drill-${index}`,
+    eye,
+    reference,
+    x1,
+    y1,
+    x2,
+    y2,
+    diameter,
+  };
+}
+
+function stripOmaExtension(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+function radiiAreMirrored(right: number[], left: number[]) {
+  if (right.length !== left.length) return false;
+  const mirrored = mirrorClosedRadiiHorizontally(right);
+  return mirrored.every((radius, index) => Math.abs(radius - left[index]) <= 1);
 }

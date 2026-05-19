@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Cable,
@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Download,
   FileDown,
+  FileUp,
   Loader2,
   Play,
   PlugZap,
@@ -39,6 +40,7 @@ import {
   freshJobName,
   type OmaFile,
   type OmaJobInfo,
+  parseOmaContent,
 } from "@/lib/oma";
 import { buildSimulatedNidekTrace } from "@/lib/simulated-trace";
 import {
@@ -85,6 +87,11 @@ const THEME_OPTIONS = [
   { value: "system", label: "System" },
 ] as const;
 type ThemeMode = (typeof THEME_OPTIONS)[number]["value"];
+type WorkflowMode = "capture" | "editor";
+type DocumentSource =
+  | { type: "none" }
+  | { type: "tracer"; label: string }
+  | { type: "oma"; label: string };
 
 export function App() {
   const serialSupported = WebSerialTransport.isSupported();
@@ -108,6 +115,11 @@ export function App() {
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workflow, setWorkflow] = useState<WorkflowMode>("capture");
+  const [documentSource, setDocumentSource] = useState<DocumentSource>({
+    type: "none",
+  });
+  const [omaWarnings, setOmaWarnings] = useState<string[]>([]);
   const [trace, setTrace] = useState<DecodedNidekTrace | null>(null);
   const [showAsPair, setShowAsPair] = useState(false);
   const [pairDblMm, setPairDblMm] = useState(18);
@@ -175,6 +187,7 @@ export function App() {
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
+  const omaFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -350,6 +363,8 @@ export function App() {
     setTrace(null);
     setShowAsPair(false);
     setDrillRecords([]);
+    setDocumentSource({ type: "none" });
+    setOmaWarnings([]);
     setProgress(0);
     setPhase("handshake");
     setStatusText("Starting trace read sequence.");
@@ -386,6 +401,8 @@ export function App() {
       setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
       setTrace(result.trace);
       setShowAsPair(result.trace.metadata.side !== "B");
+      setDocumentSource({ type: "tracer", label: "Captured trace" });
+      setWorkflow("editor");
     } catch (traceError) {
       const message = messageFromError(traceError);
       setError({ title: "Trace failed", message });
@@ -404,12 +421,16 @@ export function App() {
     setTrace(null);
     setShowAsPair(false);
     setDrillRecords([]);
+    setDocumentSource({ type: "none" });
+    setOmaWarnings([]);
     setPhase("complete");
     setProgress(100);
     setStatusText("Simulated trace loaded.");
     setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
     setTrace(simulatedTrace);
     setShowAsPair(simulatedTrace.metadata.side !== "B");
+    setDocumentSource({ type: "tracer", label: "Simulated trace" });
+    setWorkflow("editor");
     addLog({
       level: "info",
       message: "Decode: Simulated LT-900 trace loaded.",
@@ -420,10 +441,49 @@ export function App() {
     setTrace(null);
     setShowAsPair(false);
     setDrillRecords([]);
+    setDocumentSource({ type: "none" });
+    setOmaWarnings([]);
     setError(null);
     setPhase("idle");
     setProgress(0);
     setStatusText(connected ? "Ready to start a trace." : "");
+    setWorkflow("capture");
+  };
+
+  const openOmaFilePicker = () => {
+    omaFileInputRef.current?.click();
+  };
+
+  const handleOmaFileSelected = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      const parsed = parseOmaContent(await file.text(), file.name);
+      setTrace(parsed.trace);
+      setJobInfo(parsed.jobInfo);
+      setDrillRecords(parsed.drillRecords);
+      setShowAsPair(parsed.trace.metadata.side !== "B");
+      setPairDblMm(parsed.trace.metadata.dblMm || 18);
+      setPairDblInput(String(parsed.trace.metadata.dblMm || 18));
+      setDocumentSource({ type: "oma", label: parsed.fileName });
+      setOmaWarnings(parsed.warnings);
+      setPhase("complete");
+      setProgress(100);
+      setStatusText(`Opened ${parsed.fileName}.`);
+      setWorkflow("editor");
+    } catch (openError) {
+      const message = messageFromError(openError);
+      setError({ title: "Could not open OMA", message });
+      setStatusText(message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleProtocolEvent = (event: Lt900Event) => {
@@ -462,65 +522,6 @@ export function App() {
   const showStatusBox = connected || phase !== "idle";
   const showReset = trace !== null || error !== null;
 
-  if (!serialSupported) {
-    return (
-      <main className="min-h-screen bg-background">
-        <div className="flex min-h-screen items-center justify-center px-4">
-          <div className="flex max-w-md flex-col items-center gap-6 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-              <AlertCircle className="h-8 w-8 text-destructive" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-xl font-semibold">Browser not supported</h2>
-              <p className="text-sm text-muted-foreground">
-                This app requires the Web Serial API, which is only available in
-                desktop Chromium-based browsers.
-              </p>
-            </div>
-            <div className="w-full rounded-lg border bg-muted/40 p-4 text-left">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                How to use this app
-              </p>
-              <ol className="space-y-2 text-sm">
-                <li className="flex gap-2">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                    1
-                  </span>
-                  <span>
-                    Open this page in <strong>Google Chrome</strong> or{" "}
-                    <strong>Microsoft Edge</strong> on a desktop computer.
-                  </span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                    2
-                  </span>
-                  <span>
-                    Connect your frame tracer to the computer via a{" "}
-                    <strong>USB-to-serial adapter</strong>.
-                  </span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                    3
-                  </span>
-                  <span>
-                    Click <strong>Select port</strong>, choose the adapter from
-                    the browser's port picker, then start a trace.
-                  </span>
-                </li>
-              </ol>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Firefox, Safari, and mobile browsers do not support Web Serial and
-              cannot be used.
-            </p>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
@@ -530,69 +531,108 @@ export function App() {
               <h1 className="text-2xl font-semibold tracking-normal">
                 Frame Tracer
               </h1>
-              <Badge variant={connected ? "success" : "secondary"}>
-                {connected ? "Connected" : "Disconnected"}
-              </Badge>
+              {workflow === "capture" ? (
+                <Badge variant={connected ? "success" : "secondary"}>
+                  {connected ? "Connected" : "Disconnected"}
+                </Badge>
+              ) : (
+                <Badge variant={documentSource.type === "oma" ? "secondary" : "success"}>
+                  {documentSource.type === "oma"
+                    ? documentSource.label
+                    : documentSource.type === "tracer"
+                      ? documentSource.label
+                      : "OMA draft"}
+                </Badge>
+              )}
             </div>
-            <div className="mt-2 flex items-center gap-2">
-              <label
-                htmlFor="tracer-model"
-                className="text-xs font-medium text-muted-foreground whitespace-nowrap"
-              >
-                Tracer model
-              </label>
-              <select
-                id="tracer-model"
-                value={tracerModel}
-                onChange={(e) => setTracerModel(e.target.value as TracerModel)}
-                disabled={connected}
-                className="rounded-md border bg-background px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {TRACER_MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-              {connected && (
-                <span className="text-xs text-muted-foreground">
-                  Disconnect to change.
-                </span>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <div className="flex overflow-hidden rounded-md border text-xs font-medium">
+                <button
+                  className={`px-3 py-1.5 transition-colors ${workflow === "capture" ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                  onClick={() => setWorkflow("capture")}
+                >
+                  Capture
+                </button>
+                <button
+                  className={`border-l px-3 py-1.5 transition-colors ${workflow === "editor" ? "bg-primary text-primary-foreground" : "hover:bg-accent"} disabled:cursor-not-allowed disabled:opacity-40`}
+                  onClick={() => trace && setWorkflow("editor")}
+                  disabled={!trace}
+                >
+                  OMA editor
+                </button>
+              </div>
+              {workflow === "capture" && (
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="tracer-model"
+                    className="text-xs font-medium text-muted-foreground whitespace-nowrap"
+                  >
+                    Tracer model
+                  </label>
+                  <select
+                    id="tracer-model"
+                    value={tracerModel}
+                    onChange={(e) => setTracerModel(e.target.value as TracerModel)}
+                    disabled={connected}
+                    className="rounded-md border bg-background px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {TRACER_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {!connected ? (
-              <Button onClick={connect} disabled={!serialSupported || busy}>
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Cable className="h-4 w-4" />
-                )}
-                Connect tracer
-              </Button>
-            ) : (
-              <div className="flex items-center gap-2">
-                {portInfo && (
-                  <span className="text-xs text-muted-foreground">
-                    {portInfo}
-                  </span>
-                )}
-                <Button variant="outline" onClick={disconnect} disabled={busy}>
-                  <Unplug className="h-4 w-4" />
-                  Disconnect
-                </Button>
-              </div>
-            )}
-            <Button onClick={startTrace} disabled={!connected || busy}>
-              {busy && phase !== "idle" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4" />
-              )}
-              Read trace
+            <input
+              ref={omaFileInputRef}
+              type="file"
+              accept=".oma,.OMA,text/plain"
+              className="hidden"
+              onChange={handleOmaFileSelected}
+            />
+            <Button variant="outline" onClick={openOmaFilePicker} disabled={busy}>
+              <FileUp className="h-4 w-4" />
+              Open OMA
             </Button>
+            {workflow === "capture" && (
+              <>
+                {!connected ? (
+                  <Button onClick={connect} disabled={!serialSupported || busy}>
+                    {busy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Cable className="h-4 w-4" />
+                    )}
+                    Connect tracer
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {portInfo && (
+                      <span className="text-xs text-muted-foreground">
+                        {portInfo}
+                      </span>
+                    )}
+                    <Button variant="outline" onClick={disconnect} disabled={busy}>
+                      <Unplug className="h-4 w-4" />
+                      Disconnect
+                    </Button>
+                  </div>
+                )}
+                <Button onClick={startTrace} disabled={!connected || busy}>
+                  {busy && phase !== "idle" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
+                  Read trace
+                </Button>
+              </>
+            )}
             {showReset && (
               <Button
                 variant="ghost"
@@ -603,7 +643,7 @@ export function App() {
                 Reset
               </Button>
             )}
-            {!connected && (
+            {workflow === "capture" && !connected && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -636,11 +676,31 @@ export function App() {
           </Alert>
         ) : null}
 
+        {workflow === "capture" && !serialSupported ? (
+          <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+            <AlertCircle className="mt-0.5 h-4 w-4" />
+            <AlertTitle className="mb-0">Tracer capture unavailable</AlertTitle>
+            <AlertDescription className="col-start-2">
+              Web Serial requires desktop Chrome or Edge. Opening and editing OMA files is still available.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {workflow === "editor" && omaWarnings.length > 0 ? (
+          <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+            <AlertCircle className="mt-0.5 h-4 w-4" />
+            <AlertTitle className="mb-0">OMA compatibility note</AlertTitle>
+            <AlertDescription className="col-start-2">
+              {omaWarnings.join(" ")}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="flex flex-col gap-6">
             <Card>
               <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
-                <CardTitle>Preview</CardTitle>
+                <CardTitle>{workflow === "capture" ? "Capture preview" : "OMA preview"}</CardTitle>
                 <div className="flex items-center gap-2">
                   <div className="flex overflow-hidden rounded-md border text-xs font-medium">
                     <button
@@ -658,7 +718,7 @@ export function App() {
                       1:1
                     </button>
                   </div>
-                  {trace && trace.metadata.side !== "B" && trace.metadata.dblMm === 0 && (
+                  {workflow === "editor" && trace && trace.metadata.side !== "B" && trace.metadata.dblMm === 0 && (
                     <>
                       {showAsPair && (
                         <div className="flex items-center gap-1.5">
@@ -700,7 +760,7 @@ export function App() {
                   zoom={zoom}
                   pxPerMm={pxPerMm}
                 />
-                {trace && (
+                {workflow === "editor" && trace && (
                   <div className="border-t pt-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -734,6 +794,7 @@ export function App() {
               </CardContent>
             </Card>
 
+            {workflow === "editor" && (
             <Card>
               <CardHeader>
                 <CardTitle>Frame details</CardTitle>
@@ -798,6 +859,7 @@ export function App() {
                 </div>
               </CardContent>
             </Card>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -827,6 +889,19 @@ export function App() {
                   </div>
                 )}
 
+                {!showStatusBox && workflow === "capture" && (
+                  <div className="rounded-md border bg-muted/30 p-3">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <PlugZap className="h-4 w-4 text-muted-foreground" />
+                      Ready
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Connect a tracer and read a trace, or open an OMA file.
+                    </p>
+                  </div>
+                )}
+
+                {workflow === "editor" && (
                 <div className="space-y-2">
                   {primaryOma && (
                     <div className="space-y-1">
@@ -901,10 +976,11 @@ export function App() {
                   </div>
                   {!primaryOma && !secondaryOma && (
                     <p className="text-center text-xs text-muted-foreground">
-                      Capture a trace first to enable downloads.
+                      Open or capture an OMA draft first to enable downloads.
                     </p>
                   )}
                 </div>
+                )}
               </CardContent>
             </Card>
 
