@@ -155,13 +155,13 @@ export function DrillDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/50"
+      className="fixed inset-0 z-50 bg-[hsl(var(--overlay)/0.56)]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onCancel();
       }}
     >
       <div
-        className="absolute flex max-h-[92vh] w-full max-w-[1100px] flex-col rounded-lg bg-white shadow-2xl"
+        className="absolute flex max-h-[92vh] w-full max-w-[1100px] flex-col rounded-lg border bg-card text-card-foreground shadow-2xl"
         style={{ left: pos.x, top: pos.y }}
       >
         {/* Header */}
@@ -182,7 +182,7 @@ export function DrillDialog({
         {/* Body */}
         <div className="flex min-h-0 flex-1">
           {/* Canvas */}
-          <div className="shrink-0 border-r bg-gray-50 p-4">
+          <div className="shrink-0 border-r bg-muted/30 p-4">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-[10px] text-muted-foreground">
                 Left lens — click to add a record
@@ -204,7 +204,7 @@ export function DrillDialog({
                 </button>
               </div>
             </div>
-            <div className={oneToOneW ? "overflow-auto rounded border bg-white" : ""}>
+            <div className={oneToOneW ? "overflow-auto rounded border bg-[hsl(var(--preview-background))]" : ""}>
             <svg
               viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
               {...(oneToOneW
@@ -213,7 +213,7 @@ export function DrillDialog({
               onClick={handleCanvasClick}
               onMouseMove={handleCanvasMouseMove}
               onMouseLeave={() => setHoverCoords(null)}
-              className="cursor-crosshair rounded border bg-white"
+              className="cursor-crosshair rounded border bg-[hsl(var(--preview-background))]"
             >
               <defs>
                 <pattern
@@ -227,7 +227,7 @@ export function DrillDialog({
                   <path
                     d={`M ${scale} 0 L 0 0 0 ${scale}`}
                     fill="none"
-                    stroke="#e8eaed"
+                    stroke="hsl(var(--preview-grid))"
                     strokeWidth="0.5"
                   />
                 </pattern>
@@ -242,7 +242,7 @@ export function DrillDialog({
                   <path
                     d={`M ${scale * 10} 0 L 0 0 0 ${scale * 10}`}
                     fill="none"
-                    stroke="#c8cacd"
+                    stroke="hsl(var(--preview-grid-strong))"
                     strokeWidth="1"
                   />
                 </pattern>
@@ -253,14 +253,14 @@ export function DrillDialog({
               <rect width={CANVAS_W} height={CANVAS_H} fill="url(#drill-major)" />
 
               {/* Centre crosshair */}
-              <line x1={CX} y1={0} x2={CX} y2={CANVAS_H} stroke="#b0b4bb" strokeWidth="1" />
-              <line x1={0} y1={CY} x2={CANVAS_W} y2={CY} stroke="#b0b4bb" strokeWidth="1" />
+              <line x1={CX} y1={0} x2={CX} y2={CANVAS_H} stroke="hsl(var(--preview-text))" strokeWidth="1" />
+              <line x1={0} y1={CY} x2={CANVAS_W} y2={CY} stroke="hsl(var(--preview-text))" strokeWidth="1" />
 
               {/* Lens outline */}
               <path
                 d={lensPath}
-                fill="hsl(154 22% 90% / 0.55)"
-                stroke="hsl(163 42% 28%)"
+                fill="hsl(var(--trace-fill) / 0.55)"
+                stroke="hsl(var(--trace-stroke))"
                 strokeWidth="2"
               />
 
@@ -271,8 +271,8 @@ export function DrillDialog({
                   const x1 = CX - rec.x1 * scale;
                   const y1 = CY - rec.y1 * scale;
                   const active = selectedId === rec.id;
-                  const fill = active ? "hsl(42 96% 58% / 0.55)" : "hsl(42 96% 58% / 0.35)";
-                  const stroke = active ? "hsl(25 90% 40%)" : "hsl(30 92% 42%)";
+                  const fill = active ? "hsl(var(--drill-fill) / 0.55)" : "hsl(var(--drill-fill) / 0.35)";
+                  const stroke = active ? "hsl(var(--drill-active-stroke))" : "hsl(var(--drill-stroke))";
                   const sw = active ? 2 : 1.5;
                   const isSlot = rec.x2 !== null && rec.y2 !== null;
                   const cr = Math.max((rec.diameter / 2) * scale, 4);
@@ -312,7 +312,7 @@ export function DrillDialog({
                           <line x1={x1} y1={y1 - cr - 3} x2={x1} y2={y1 + cr + 3} stroke={stroke} strokeWidth="1" />
                         </>
                       )}
-                      <text x={x1} y={y1 - cr - 5} textAnchor="middle" fontSize="10" fill="#374151" fontFamily="system-ui, sans-serif">
+                      <text x={x1} y={y1 - cr - 5} textAnchor="middle" fontSize="10" fill="hsl(var(--preview-text))" fontFamily="system-ui, sans-serif">
                         {idx + 1}
                       </text>
                     </g>
@@ -325,7 +325,7 @@ export function DrillDialog({
                   y={CANVAS_H - 6}
                   textAnchor="end"
                   fontSize="10"
-                  fill="#374151"
+                  fill="hsl(var(--preview-text))"
                   fontFamily="system-ui, sans-serif"
                 >
                   {hoverCoords.x.toFixed(2)}, {hoverCoords.y.toFixed(2)}
@@ -366,7 +366,7 @@ export function DrillDialog({
                   {records.map((rec, idx) => (
                     <tr
                       key={rec.id}
-                      className={`border-b last:border-0 transition-colors ${selectedId === rec.id ? "bg-amber-50" : "hover:bg-muted/30"}`}
+                      className={`border-b last:border-0 transition-colors ${selectedId === rec.id ? "bg-[hsl(var(--selected))]" : "hover:bg-muted/30"}`}
                       onClick={() => setSelectedId(rec.id)}
                     >
                       <td className="py-1.5 pr-2 text-[11px] text-muted-foreground">{idx + 1}</td>

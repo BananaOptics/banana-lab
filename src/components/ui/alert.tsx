@@ -7,7 +7,7 @@ const alertVariants = cva("relative w-full rounded-lg border p-4 text-sm", {
     variant: {
       default: "bg-card text-card-foreground",
       destructive: "border-destructive/50 text-destructive",
-      warning: "border-amber-300 bg-amber-50 text-amber-950",
+      warning: "border-[hsl(var(--warning-border))] bg-[hsl(var(--warning-background))] text-[hsl(var(--warning-foreground))]",
     },
   },
   defaultVariants: {

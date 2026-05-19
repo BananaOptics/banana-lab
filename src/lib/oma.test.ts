@@ -33,6 +33,30 @@ describe("buildOmaContent", () => {
     expect(readRadiiRecord(oma, "L")).toEqual(asymmetricRadii);
     expect(oma).toContain("TRCFMT=1;400;E;R;B");
   });
+
+  it("exports slots as DRILLE records with start and end coordinates", () => {
+    const oma = buildOmaContent(
+      fakeTrace("R"),
+      400,
+      jobInfo,
+      [
+        {
+          id: "slot-1",
+          eye: "B",
+          reference: "C",
+          x1: -17,
+          y1: 10.32,
+          x2: -15,
+          y2: 10.32,
+          diameter: 2.3,
+        },
+      ],
+      18,
+    );
+
+    expect(oma).toContain("DRILLE=B;C;-17;10.32;2.3;-15;10.32");
+    expect(oma).not.toContain("DRILLES=");
+  });
 });
 
 function fakeTrace(side: NidekSide): DecodedNidekTrace {

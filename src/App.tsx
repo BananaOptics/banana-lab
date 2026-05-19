@@ -10,7 +10,9 @@ import {
   Play,
   PlugZap,
   RotateCcw,
+  Settings,
   Unplug,
+  X,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -75,10 +77,27 @@ const TRACER_MODELS = [
 type TracerModel = (typeof TRACER_MODELS)[number]["value"];
 
 const PXPERMM_KEY = "frame-tracer-px-per-mm";
+const THEME_KEY = "frame-tracer-theme";
 const CAL_REF_PX = 200;
+const THEME_OPTIONS = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
+] as const;
+type ThemeMode = (typeof THEME_OPTIONS)[number]["value"];
 
 export function App() {
   const serialSupported = WebSerialTransport.isSupported();
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    try {
+      const stored = localStorage.getItem(THEME_KEY);
+      return stored === "light" || stored === "dark" || stored === "system"
+        ? stored
+        : "system";
+    } catch {
+      return "system";
+    }
+  });
   const [tracerModel, setTracerModel] =
     useState<TracerModel>("nidek-lt900-std");
   const [connected, setConnected] = useState(false);
@@ -88,6 +107,7 @@ export function App() {
   const [statusText, setStatusText] = useState("");
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
   const [error, setError] = useState<AppError | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [trace, setTrace] = useState<DecodedNidekTrace | null>(null);
   const [showAsPair, setShowAsPair] = useState(false);
   const [pairDblMm, setPairDblMm] = useState(18);
@@ -155,6 +175,26 @@ export function App() {
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const useDark = theme === "dark" || (theme === "system" && media.matches);
+      document.documentElement.classList.toggle("dark", useDark);
+      document.documentElement.style.colorScheme = useDark ? "dark" : "light";
+    };
+
+    applyTheme();
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // ignore
+    }
+
+    if (theme !== "system") return;
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [theme]);
 
   const primaryOma = useMemo(
     () => omaFiles.find((file) => file.pointCount === 400) ?? null,
@@ -575,6 +615,16 @@ export function App() {
                 Release ports
               </Button>
             )}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Open settings"
+              title="Settings"
+              className="ml-auto"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
           </div>
         </header>
 
@@ -727,7 +777,7 @@ export function App() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2 text-sm font-medium">
                           {phase === "complete" ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+                            <CheckCircle2 className="h-4 w-4 text-[hsl(var(--success))]" />
                           ) : (
                             <PlugZap className="h-4 w-4 text-muted-foreground" />
                           )}
@@ -954,9 +1004,9 @@ export function App() {
               </CardHeader>
               {logExpanded && (
                 <CardContent>
-                  <div className="h-[320px] overflow-auto rounded-md border bg-black p-3 font-mono text-xs text-zinc-100">
+                  <div className="h-[320px] overflow-auto rounded-md border bg-[hsl(var(--log-background))] p-3 font-mono text-xs text-[hsl(var(--log-foreground))]">
                     {logs.length === 0 ? (
-                      <div className="text-zinc-500">
+                      <div className="text-[hsl(var(--log-muted))]">
                         No serial activity yet.
                       </div>
                     ) : (
@@ -992,7 +1042,97 @@ export function App() {
           onCancel={() => setDrillDialogOpen(false)}
         />
       )}
+      {settingsOpen && (
+        <SettingsDialog
+          theme={theme}
+          onThemeChange={setTheme}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </main>
+  );
+}
+
+function SettingsDialog({
+  theme,
+  onThemeChange,
+  onClose,
+}: {
+  theme: ThemeMode;
+  onThemeChange: (value: ThemeMode) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--overlay)/0.56)] p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-md rounded-lg border bg-card text-card-foreground shadow-2xl">
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <h2 id="settings-title" className="text-sm font-semibold">
+            Settings
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close settings"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-5 px-5 py-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-medium">Appearance</div>
+              <div className="text-xs text-muted-foreground">
+                Choose how the interface is displayed.
+              </div>
+            </div>
+            <ThemeSelect value={theme} onChange={onThemeChange} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThemeSelect({
+  value,
+  onChange,
+}: {
+  value: ThemeMode;
+  onChange: (value: ThemeMode) => void;
+}) {
+  return (
+    <div className="relative min-w-36">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as ThemeMode)}
+        className="h-9 w-full appearance-none rounded-md border bg-background px-3 pr-8 text-sm font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="Appearance theme"
+      >
+        {THEME_OPTIONS.map(({ value: optionValue, label }) => (
+          <option key={optionValue} value={optionValue}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    </div>
   );
 }
 
@@ -1088,14 +1228,14 @@ function isTextEntryTarget(target: EventTarget | null) {
 function logClassName(level: SerialLogEntry["level"]) {
   switch (level) {
     case "rx":
-      return "text-sky-300";
+      return "text-[hsl(var(--log-rx))]";
     case "tx":
-      return "text-emerald-300";
+      return "text-[hsl(var(--log-tx))]";
     case "warning":
-      return "text-amber-300";
+      return "text-[hsl(var(--log-warning))]";
     case "error":
-      return "text-red-300";
+      return "text-[hsl(var(--log-error))]";
     default:
-      return "text-zinc-300";
+      return "text-[hsl(var(--log-foreground))]";
   }
 }

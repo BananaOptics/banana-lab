@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 import type { DecodedNidekTrace } from "@/lib/nidek-native";
 import type { DrillRecord } from "@/lib/oma";
 import { buildTwoLensPaths } from "@/lib/trace-rendering";
-import { formatNumber, polarRadiiToPoints } from "@/lib/trace-geometry";
+import { formatNumber } from "@/lib/trace-geometry";
 
 const PREVIEW_WIDTH = 640;
 const PREVIEW_HEIGHT = 480;
@@ -57,7 +57,7 @@ export function TracePreview({ trace, drillRecords = [], invalidDrillRecordIds =
 
   return (
     <div className="space-y-4">
-      <div className={oneToOneW ? "overflow-auto rounded-md border bg-white flex justify-center items-start" : "relative aspect-[4/3] min-h-[240px] overflow-hidden rounded-md border bg-white sm:min-h-[320px]"}>
+      <div className={oneToOneW ? "overflow-auto rounded-md border bg-[hsl(var(--preview-background))] flex justify-center items-start" : "relative aspect-[4/3] min-h-[240px] overflow-hidden rounded-md border bg-[hsl(var(--preview-background))] sm:min-h-[320px]"}>
         <svg
           viewBox={`0 0 ${PREVIEW_WIDTH} ${PREVIEW_HEIGHT}`}
           {...(oneToOneW
@@ -68,13 +68,13 @@ export function TracePreview({ trace, drillRecords = [], invalidDrillRecordIds =
         >
           <defs>
             <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-              <path d="M 32 0 L 0 0 0 32" fill="none" stroke="hsl(220 10% 90%)" strokeWidth="1" />
+              <path d="M 32 0 L 0 0 0 32" fill="none" stroke="hsl(var(--preview-grid))" strokeWidth="1" />
             </pattern>
           </defs>
           <rect width={PREVIEW_WIDTH} height={PREVIEW_HEIGHT} fill="url(#grid)" />
-          <line x1="320" y1="40" x2="320" y2="440" stroke="hsl(220 10% 80%)" strokeWidth="1.5" />
-          <line x1="80" y1="240" x2="560" y2="240" stroke="hsl(220 10% 80%)" strokeWidth="1.5" />
-          <text x={PREVIEW_WIDTH - 24} y={28} textAnchor="end" fontSize="11" fill="hsl(220 12% 42%)" fontFamily="system-ui, sans-serif">
+          <line x1="320" y1="40" x2="320" y2="440" stroke="hsl(var(--preview-grid-strong))" strokeWidth="1.5" />
+          <line x1="80" y1="240" x2="560" y2="240" stroke="hsl(var(--preview-grid-strong))" strokeWidth="1.5" />
+          <text x={PREVIEW_WIDTH - 24} y={28} textAnchor="end" fontSize="11" fill="hsl(var(--preview-text))" fontFamily="system-ui, sans-serif">
             Dimensions in mm
           </text>
 
@@ -87,7 +87,7 @@ export function TracePreview({ trace, drillRecords = [], invalidDrillRecordIds =
                 vboxMm={stats.vboxMm}
                 scale={svgPaths.single.scale}
               />
-              <path d={svgPaths.single.path} fill="hsl(154 22% 90% / 0.68)" stroke="hsl(163 42% 28%)" strokeWidth="3" />
+              <path d={svgPaths.single.path} fill="hsl(var(--trace-fill) / 0.68)" stroke="hsl(var(--trace-stroke))" strokeWidth="3" />
               <DrillRecordOverlay
                 records={drillRecords}
                 invalidRecordIds={invalidDrillRecordIds}
@@ -127,8 +127,8 @@ export function TracePreview({ trace, drillRecords = [], invalidDrillRecordIds =
                 dblMm={metadata.dblMm}
               />
               {/* Lens shapes */}
-              <path d={svgPaths.r} fill="hsl(154 22% 90% / 0.68)" stroke="hsl(163 42% 28%)" strokeWidth="3" />
-              <path d={svgPaths.l} fill="hsl(154 22% 90% / 0.68)" stroke="hsl(163 42% 28%)" strokeWidth="3" />
+              <path d={svgPaths.r} fill="hsl(var(--trace-fill) / 0.68)" stroke="hsl(var(--trace-stroke))" strokeWidth="3" />
+              <path d={svgPaths.l} fill="hsl(var(--trace-fill) / 0.68)" stroke="hsl(var(--trace-stroke))" strokeWidth="3" />
               <DrillRecordOverlay
                 records={drillRecords}
                 invalidRecordIds={invalidDrillRecordIds}
@@ -179,8 +179,8 @@ function DrillRecordOverlay({
     <g aria-label="Drill records">
       {records.flatMap((rec) => {
         const isInvalid = invalidRecordIds.has(rec.id);
-        const stroke = isInvalid ? "hsl(0 78% 50%)" : "hsl(30 92% 42%)";
-        const fill = isInvalid ? "hsl(0 78% 50% / 0.18)" : "hsl(42 96% 58% / 0.32)";
+        const stroke = isInvalid ? "hsl(var(--destructive))" : "hsl(var(--drill-stroke))";
+        const fill = isInvalid ? "hsl(var(--destructive) / 0.18)" : "hsl(var(--drill-fill) / 0.32)";
         const isSlot = rec.x2 !== null && rec.y2 !== null;
 
         const renderFor = (key: string, cx: number, mirrorX: boolean) => {
@@ -268,8 +268,9 @@ function HVBoxAnnotation({
   const top = cy - hh;
   const bottom = cy + hh;
 
-  const annColor = "hsl(210 55% 48%)";
-  const labelColor = "hsl(210 55% 32%)";
+  const annColor = "hsl(var(--annotation))";
+  const labelColor = "hsl(var(--annotation-foreground))";
+  const labelBackground = "hsl(var(--annotation-label))";
   const font = "system-ui, sans-serif";
 
   // HBOX: dimension line 14px below the box
@@ -316,7 +317,7 @@ function HVBoxAnnotation({
           <line x1={left} y1={hAnnY} x2={right} y2={hAnnY} stroke={annColor} strokeWidth="1" />
           <line x1={left} y1={hAnnY - 6} x2={left} y2={hAnnY + 6} stroke={annColor} strokeWidth="1" />
           <line x1={right} y1={hAnnY - 6} x2={right} y2={hAnnY + 6} stroke={annColor} strokeWidth="1" />
-          <rect x={cx - 38} y={hAnnY + 4} width={76} height={16} fill="white" rx="3" />
+          <rect x={cx - 38} y={hAnnY + 4} width={76} height={16} fill={labelBackground} rx="3" />
           <text x={cx} y={hAnnY + 16} textAnchor="middle" fontSize="11" fill={labelColor} fontFamily={font}>
             {`HBOX ${formatNumber(hboxMm, 1)}`}
           </text>
@@ -331,14 +332,14 @@ function HVBoxAnnotation({
           <line x1={vAnnX - 6} y1={bottom} x2={vAnnX + 6} y2={bottom} stroke={annColor} strokeWidth="1" />
           {resolvedVboxSide === "right" ? (
             <>
-              <rect x={vboxLabelX} y={cy - VBOX_LABEL_HEIGHT / 2} width={VBOX_LABEL_WIDTH} height={VBOX_LABEL_HEIGHT} fill="white" rx="3" />
+              <rect x={vboxLabelX} y={cy - VBOX_LABEL_HEIGHT / 2} width={VBOX_LABEL_WIDTH} height={VBOX_LABEL_HEIGHT} fill={labelBackground} rx="3" />
               <text x={vboxLabelX + 4} y={cy + 4} textAnchor="start" fontSize="11" fill={labelColor} fontFamily={font}>
                 {`VBOX ${formatNumber(vboxMm, 1)}`}
               </text>
             </>
           ) : (
             <>
-              <rect x={vboxLabelX} y={cy - VBOX_LABEL_HEIGHT / 2} width={VBOX_LABEL_WIDTH} height={VBOX_LABEL_HEIGHT} fill="white" rx="3" />
+              <rect x={vboxLabelX} y={cy - VBOX_LABEL_HEIGHT / 2} width={VBOX_LABEL_WIDTH} height={VBOX_LABEL_HEIGHT} fill={labelBackground} rx="3" />
               <text x={vboxLabelX + VBOX_LABEL_WIDTH - 4} y={cy + 4} textAnchor="end" fontSize="11" fill={labelColor} fontFamily={font}>
                 {`VBOX ${formatNumber(vboxMm, 1)}`}
               </text>
@@ -370,8 +371,9 @@ function DblBoxAnnotation({
   const bottom = cy + hh;
   const centerX = (x1 + x2) / 2;
   const labelX = clamp(centerX - DBL_LABEL_WIDTH / 2, 0, PREVIEW_WIDTH - DBL_LABEL_WIDTH);
-  const annColor = "hsl(210 55% 48%)";
-  const labelColor = "hsl(210 55% 32%)";
+  const annColor = "hsl(var(--annotation))";
+  const labelColor = "hsl(var(--annotation-foreground))";
+  const labelBackground = "hsl(var(--annotation-label))";
   const font = "system-ui, sans-serif";
 
   return (
@@ -381,7 +383,7 @@ function DblBoxAnnotation({
         y={top}
         width={x2 - x1}
         height={bottom - top}
-        fill="hsl(210 55% 48% / 0.06)"
+        fill="hsl(var(--annotation) / 0.06)"
         stroke={annColor}
         strokeWidth="1"
         strokeDasharray="4 3"
@@ -390,7 +392,7 @@ function DblBoxAnnotation({
       <line x1={x1} y1={top} x2={x2} y2={top} stroke={annColor} strokeWidth="1" />
       <line x1={x1} y1={top - 6} x2={x1} y2={top + 6} stroke={annColor} strokeWidth="1" />
       <line x1={x2} y1={top - 6} x2={x2} y2={top + 6} stroke={annColor} strokeWidth="1" />
-      <rect x={labelX} y={top - DBL_LABEL_HEIGHT / 2} width={DBL_LABEL_WIDTH} height={DBL_LABEL_HEIGHT} fill="white" rx="3" />
+      <rect x={labelX} y={top - DBL_LABEL_HEIGHT / 2} width={DBL_LABEL_WIDTH} height={DBL_LABEL_HEIGHT} fill={labelBackground} rx="3" />
       <text x={labelX + DBL_LABEL_WIDTH / 2} y={top + 4} textAnchor="middle" fontSize="11" fill={labelColor} fontFamily={font}>
         {`DBL ${formatNumber(dblMm, 1)}`}
       </text>

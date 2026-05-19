@@ -9,8 +9,9 @@ export type DrillEye = "B" | "R" | "L";
 export type DrillReference = "C";
 
 /**
- * A drill record. If x2/y2 are null it is a hole (DRILLE); if x2/y2 are
- * provided it is a slot (DRILLES) defined by its two endpoints.
+ * A drill record. If x2/y2 are null it is a hole; if x2/y2 are provided it is
+ * a slot. VCA/OMA uses DRILLE for both cases, with optional end coordinates
+ * for slots.
  */
 export interface DrillRecord {
   id: string;
@@ -119,12 +120,15 @@ function formatDrillRecord(r: DrillRecord): string {
     // Hole
     return `DRILLE=${[r.eye, r.reference, formatNumber(r.x1, 2), formatNumber(r.y1, 2), formatNumber(r.diameter, 2)].join(";")}`;
   }
-  // Slot — compute center, angle, and length from the two endpoints
-  const cx = (r.x1 + r.x2) / 2;
-  const cy = (r.y1 + r.y2) / 2;
-  const dx = r.x2 - r.x1;
-  const dy = r.y2 - r.y1;
-  const length = Math.sqrt(dx * dx + dy * dy);
-  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-  return `DRILLES=${[r.eye, r.reference, formatNumber(cx, 2), formatNumber(cy, 2), formatNumber(angle, 1), formatNumber(length, 2), formatNumber(r.diameter, 2)].join(";")}`;
+  // Slot: fields 6 and 7 are the end coordinates; absent feature type implies
+  // the standard hole/slot interpretation.
+  return `DRILLE=${[
+    r.eye,
+    r.reference,
+    formatNumber(r.x1, 2),
+    formatNumber(r.y1, 2),
+    formatNumber(r.diameter, 2),
+    formatNumber(r.x2, 2),
+    formatNumber(r.y2, 2),
+  ].join(";")}`;
 }
