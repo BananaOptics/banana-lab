@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { DrillDialog } from "@/components/DrillDialog";
 import { TracePreview } from "@/components/TracePreview";
 import {
   readLt900Trace,
@@ -32,10 +33,16 @@ import {
 import type { DecodedNidekTrace } from "@/lib/nidek-native";
 import {
   buildOmaFiles,
+  type DrillRecord,
   freshJobName,
   type OmaFile,
   type OmaJobInfo,
 } from "@/lib/oma";
+import { buildSimulatedNidekTrace } from "@/lib/simulated-trace";
+import {
+  mirrorClosedRadiiHorizontally,
+  pointIsInsideClosedTrace,
+} from "@/lib/trace-geometry";
 import {
   type SerialLogEntry,
   WebSerialTransport,
@@ -67,6 +74,9 @@ const TRACER_MODELS = [
 ] as const;
 type TracerModel = (typeof TRACER_MODELS)[number]["value"];
 
+const PXPERMM_KEY = "frame-tracer-px-per-mm";
+const CAL_REF_PX = 200;
+
 export function App() {
   const serialSupported = WebSerialTransport.isSupported();
   const [tracerModel, setTracerModel] =
@@ -79,6 +89,20 @@ export function App() {
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [trace, setTrace] = useState<DecodedNidekTrace | null>(null);
+  const [showAsPair, setShowAsPair] = useState(false);
+  const [pairDblMm, setPairDblMm] = useState(18);
+  const [pairDblInput, setPairDblInput] = useState("18");
+  const [zoom, setZoom] = useState<"fit" | "1:1">("fit");
+  const [pxPerMm, setPxPerMm] = useState<number | null>(() => {
+    try {
+      const v = localStorage.getItem(PXPERMM_KEY);
+      return v ? parseFloat(v) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [calOpen, setCalOpen] = useState(false);
+  const [calDraft, setCalDraft] = useState("");
   const [jobInfo, setJobInfo] = useState<OmaJobInfo>({
     job: "",
     ven: "",
@@ -86,9 +110,43 @@ export function App() {
     wrapang: "",
     panto: "",
   });
+  const [drillRecords, setDrillRecords] = useState<DrillRecord[]>([]);
+  const [drillDialogOpen, setDrillDialogOpen] = useState(false);
+  const pairPreviewTrace = useMemo(() => {
+    if (!trace || !showAsPair || trace.metadata.side === "B") return null;
+    // buildTwoLensPaths always uses radii400 as the right-lens template and mirrors for left.
+    // If we captured the left side, mirror first so the geometry comes out correct.
+    const radii400 =
+      trace.metadata.side === "L"
+        ? mirrorClosedRadiiHorizontally(trace.radii400)
+        : trace.radii400;
+    return { ...trace, radii400, metadata: { ...trace.metadata, dblMm: pairDblMm } };
+  }, [trace, showAsPair, pairDblMm]);
+  const invalidDrillRecordIds = useMemo(() => {
+    if (!trace) return new Set<string>();
+
+    return new Set(
+      drillRecords
+        .filter(
+          (r) =>
+            r.diameter <= 0 ||
+            !pointIsInsideClosedTrace({ x: r.x1, y: r.y1 }, trace.stats.points),
+        )
+        .map((r) => r.id),
+    );
+  }, [drillRecords, trace]);
   const omaFiles = useMemo(
-    () => (trace ? buildOmaFiles(trace, jobInfo) : []),
-    [trace, jobInfo],
+    () => {
+      if (!trace) return [];
+      // For single-lens traces, use pairDblMm as the OMA DBL when the user has
+      // entered it (showAsPair enables the DBL input). This ensures the bridge
+      // distance appears in the file for rimless/frameless ordering.
+      const dblOverride = (showAsPair && trace.metadata.side !== "B" && pairDblMm > 0)
+        ? pairDblMm
+        : undefined;
+      return buildOmaFiles(trace, jobInfo, drillRecords, dblOverride);
+    },
+    [trace, jobInfo, drillRecords, showAsPair, pairDblMm],
   );
   const [busy, setBusy] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
@@ -137,6 +195,30 @@ export function App() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  useEffect(() => {
+    let typedSequence = "";
+    const handler = (event: KeyboardEvent) => {
+      if (event.altKey && event.shiftKey && (event.code === "KeyR" || event.key.toLowerCase() === "r")) {
+        event.preventDefault();
+        runSimulatedTrace();
+        typedSequence = "";
+        return;
+      }
+
+      if (isTextEntryTarget(event.target)) return;
+
+      typedSequence = `${typedSequence}${event.key.toLowerCase()}`.slice(-8);
+      if (typedSequence.endsWith("simtrace")) {
+        event.preventDefault();
+        runSimulatedTrace();
+        typedSequence = "";
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  });
 
   const addLog = (entry: Omit<UiLogEntry, "id">) => {
     const id = logIdRef.current;
@@ -226,6 +308,8 @@ export function App() {
     setBusy(true);
     setError(null);
     setTrace(null);
+    setShowAsPair(false);
+    setDrillRecords([]);
     setProgress(0);
     setPhase("handshake");
     setStatusText("Starting trace read sequence.");
@@ -236,6 +320,7 @@ export function App() {
       const t = result.trace;
       console.group(`Trace — side=${t.metadata.side}`);
       console.log("side", t.metadata.side);
+      console.log("encoding", t.metadata.encoding);
       console.log("fcrv", t.metadata.fcrv);
       console.log("centerDistanceMm", t.metadata.centerDistanceMm);
       console.log("dblMm", t.metadata.dblMm);
@@ -252,8 +337,15 @@ export function App() {
           .join(" "),
       );
       console.groupEnd();
+      if (t.metadata.encoding === "headerless-rimless") {
+        addLog({
+          level: "info",
+          message: `Rimless decode: cleanHead=${formatByteHead(t.cleanFrame, 48)} minR=${t.stats.minRadius} maxR=${t.stats.maxRadius} HBOX=${t.stats.hboxMm} VBOX=${t.stats.vboxMm} CIRC=${t.stats.circMm}`,
+        });
+      }
       setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
       setTrace(result.trace);
+      setShowAsPair(result.trace.metadata.side !== "B");
     } catch (traceError) {
       const message = messageFromError(traceError);
       setError({ title: "Trace failed", message });
@@ -265,8 +357,29 @@ export function App() {
     }
   };
 
+  const runSimulatedTrace = () => {
+    const simulatedTrace = buildSimulatedNidekTrace();
+    setBusy(false);
+    setError(null);
+    setTrace(null);
+    setShowAsPair(false);
+    setDrillRecords([]);
+    setPhase("complete");
+    setProgress(100);
+    setStatusText("Simulated trace loaded.");
+    setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
+    setTrace(simulatedTrace);
+    setShowAsPair(simulatedTrace.metadata.side !== "B");
+    addLog({
+      level: "info",
+      message: "Decode: Simulated LT-900 trace loaded.",
+    });
+  };
+
   const resetTrace = () => {
     setTrace(null);
+    setShowAsPair(false);
+    setDrillRecords([]);
     setError(null);
     setPhase("idle");
     setProgress(0);
@@ -293,6 +406,15 @@ export function App() {
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
+  };
+
+  const saveCalibration = () => {
+    const mm = parseFloat(calDraft);
+    if (isNaN(mm) || mm <= 0) return;
+    const px = CAL_REF_PX / mm;
+    setPxPerMm(px);
+    try { localStorage.setItem(PXPERMM_KEY, String(px)); } catch { /* ignore */ }
+    setCalOpen(false);
   };
 
   const isActivePhase =
@@ -457,21 +579,77 @@ export function App() {
         </header>
 
         {error ? (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>{error.title}</AlertTitle>
-            <AlertDescription>{error.message}</AlertDescription>
+          <Alert variant="destructive" className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+            <AlertCircle className="mt-0.5 h-4 w-4" />
+            <AlertTitle className="mb-0">{error.title}</AlertTitle>
+            <AlertDescription className="col-start-2">{error.message}</AlertDescription>
           </Alert>
         ) : null}
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="flex flex-col gap-6">
             <Card>
-              <CardHeader>
+              <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
                 <CardTitle>Preview</CardTitle>
+                <div className="flex items-center gap-2">
+                  <div className="flex overflow-hidden rounded-md border text-xs font-medium">
+                    <button
+                      className={`px-2.5 py-1 transition-colors ${zoom === "fit" ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                      onClick={() => setZoom("fit")}
+                    >
+                      Fit
+                    </button>
+                    <button
+                      className={`border-l px-2.5 py-1 transition-colors ${zoom === "1:1" ? "bg-primary text-primary-foreground" : "hover:bg-accent"} disabled:cursor-not-allowed disabled:opacity-40`}
+                      onClick={() => setZoom("1:1")}
+                      disabled={!pxPerMm}
+                      title={!pxPerMm ? "Calibrate screen scale first" : "True 1:1 physical scale"}
+                    >
+                      1:1
+                    </button>
+                  </div>
+                  {trace && trace.metadata.side !== "B" && trace.metadata.dblMm === 0 && (
+                    <>
+                      {showAsPair && (
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor="pair-dbl" className="text-xs text-muted-foreground whitespace-nowrap">
+                            DBL
+                          </label>
+                          <input
+                            id="pair-dbl"
+                            type="text"
+                            inputMode="decimal"
+                            value={pairDblInput}
+                            onChange={(e) => {
+                              setPairDblInput(e.target.value);
+                              const n = parseFloat(e.target.value);
+                              if (!isNaN(n) && n >= 0) setPairDblMm(n);
+                            }}
+                            className="w-16 rounded-md border bg-background px-2 py-1 text-sm"
+                          />
+                          <span className="text-xs text-muted-foreground">mm</span>
+                        </div>
+                      )}
+                      <Button
+                        variant={showAsPair ? "secondary" : "outline"}
+                        size="sm"
+                        onClick={() => setShowAsPair((v) => !v)}
+                      >
+                        {showAsPair ? "Show original" : "Show as pair"}
+                      </Button>
+                    </>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
-                <TracePreview trace={trace} isLoading={isActivePhase} />
+                <TracePreview
+                  trace={pairPreviewTrace ?? trace}
+                  drillRecords={drillRecords}
+                  invalidDrillRecordIds={invalidDrillRecordIds}
+                  isLoading={isActivePhase}
+                  zoom={zoom}
+                  pxPerMm={pxPerMm}
+                />
               </CardContent>
             </Card>
 
@@ -485,12 +663,7 @@ export function App() {
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
-                    <label
-                      htmlFor="oma-ven"
-                      className="text-sm font-medium"
-                    >
-                      Brand
-                    </label>
+                    <FieldLabel htmlFor="oma-ven" label="Frame brand" field="VEN" />
                     <input
                       id="oma-ven"
                       value={jobInfo.ven}
@@ -502,29 +675,19 @@ export function App() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label
-                      htmlFor="oma-model"
-                      className="text-sm font-medium"
-                    >
-                      Model
-                    </label>
+                    <FieldLabel htmlFor="oma-model" label="Frame model" field="MODEL" />
                     <input
                       id="oma-model"
                       value={jobInfo.model}
                       onChange={(e) =>
                         setJobInfo((p) => ({ ...p, model: e.target.value }))
                       }
-                      placeholder="e.g. RB3025"
+                      placeholder="e.g. RB5154 Clubmaster"
                       className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label
-                      htmlFor="oma-wrapang"
-                      className="text-sm font-medium"
-                    >
-                      Wrap angle (°)
-                    </label>
+                    <FieldLabel htmlFor="oma-wrapang" label="Wrap angle (°)" field="WRAPANG" />
                     <input
                       id="oma-wrapang"
                       type="number"
@@ -538,12 +701,7 @@ export function App() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label
-                      htmlFor="oma-panto"
-                      className="text-sm font-medium"
-                    >
-                      Pantoscopic tilt (°)
-                    </label>
+                    <FieldLabel htmlFor="oma-panto" label="Pantoscopic tilt (°)" field="PANTO" />
                     <input
                       id="oma-panto"
                       type="number"
@@ -585,6 +743,38 @@ export function App() {
                           {statusText}
                         </p>
                       )}
+                  </div>
+                )}
+
+                {trace && (
+                  <div className="border-t pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-semibold">Drill records</h2>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {drillRecords.length > 0
+                            ? `${drillRecords.length} record${drillRecords.length !== 1 ? "s" : ""}`
+                            : "No drill records added."}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDrillDialogOpen(true)}
+                      >
+                        Edit
+                      </Button>
+                    </div>
+
+                    {invalidDrillRecordIds.size > 0 && (
+                      <Alert variant="destructive" className="mt-3 grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 py-2">
+                        <AlertCircle className="mt-0.5 h-4 w-4" />
+                        <AlertTitle className="mb-0 text-sm">Check drill placement</AlertTitle>
+                        <AlertDescription className="col-start-2 text-xs">
+                          One or more holes appear outside the lens outline or have an invalid diameter.
+                        </AlertDescription>
+                      </Alert>
+                    )}
                   </div>
                 )}
 
@@ -673,6 +863,72 @@ export function App() {
               <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
                 <button
                   className="flex items-center gap-2 text-left"
+                  onClick={() => setCalOpen((o) => !o)}
+                >
+                  <ChevronDown
+                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${calOpen ? "" : "-rotate-90"}`}
+                  />
+                  <div>
+                    <CardTitle>Screen scale</CardTitle>
+                    <CardDescription className="mt-1">
+                      {pxPerMm
+                        ? `Calibrated (${pxPerMm.toFixed(3)} px/mm)`
+                        : "Not calibrated — 1:1 view disabled"}
+                    </CardDescription>
+                  </div>
+                </button>
+              </CardHeader>
+              {calOpen && (
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Measure the line below with a physical ruler and enter its
+                    length to enable the 1:1 preview.
+                  </p>
+                  <div className="flex flex-col items-start gap-1">
+                    <div
+                      style={{ width: `${CAL_REF_PX}px`, height: "6px" }}
+                      className="rounded-full bg-primary"
+                    />
+                    <span className="text-[10px] text-muted-foreground">
+                      {CAL_REF_PX} px reference line
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="cal-cm"
+                      className="text-sm font-medium"
+                    >
+                      Line length (mm)
+                    </label>
+                    <input
+                      id="cal-cm"
+                      type="number"
+                      step="0.01"
+                      min="0.1"
+                      value={calDraft}
+                      onChange={(e) => setCalDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveCalibration();
+                      }}
+                      placeholder="e.g. 53"
+                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                    />
+                  </div>
+                  <Button
+                    onClick={saveCalibration}
+                    disabled={!calDraft || parseFloat(calDraft) <= 0}
+                    className="w-full"
+                  >
+                    Save
+                  </Button>
+                </CardContent>
+              )}
+            </Card>
+
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+                <button
+                  className="flex items-center gap-2 text-left"
                   onClick={() => setLogExpanded((o) => !o)}
                 >
                   <ChevronDown
@@ -723,6 +979,19 @@ export function App() {
           </div>
         </section>
       </div>
+
+      {drillDialogOpen && trace && (
+        <DrillDialog
+          trace={trace}
+          initialRecords={drillRecords}
+          pxPerMm={pxPerMm}
+          onSave={(records) => {
+            setDrillRecords(records);
+            setDrillDialogOpen(false);
+          }}
+          onCancel={() => setDrillDialogOpen(false)}
+        />
+      )}
     </main>
   );
 }
@@ -743,6 +1012,77 @@ function formatPortInfo(info: SerialPortInfo | null) {
 
 function messageFromError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+
+function formatByteHead(bytes: Uint8Array, count: number) {
+  return Array.from(bytes.slice(0, count))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
+}
+
+function FieldLabel({ htmlFor, label, field }: { htmlFor: string; label: string; field: string }) {
+  return (
+    <label htmlFor={htmlFor} className="flex items-baseline justify-between gap-2 text-sm font-medium">
+      <span>{label}</span>
+      <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</span>
+    </label>
+  );
+}
+
+function NumericInput({
+  id,
+  value,
+  onValueChange,
+}: {
+  id: string;
+  value: number;
+  onValueChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(formatInputNumber(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(formatInputNumber(value));
+  }, [focused, value]);
+
+  return (
+    <input
+      id={id}
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        if (isCompleteNumber(next)) onValueChange(Number(next));
+      }}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        setDraft(formatInputNumber(value));
+      }}
+      className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+    />
+  );
+}
+
+function formatInputNumber(value: number) {
+  return Number.isFinite(value) ? String(value) : "";
+}
+
+function isCompleteNumber(value: string) {
+  return /^-?(?:\d+\.?\d*|\.\d+)$/.test(value.trim());
+}
+
+function isTextEntryTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  );
 }
 
 function logClassName(level: SerialLogEntry["level"]) {

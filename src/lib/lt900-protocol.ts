@@ -1,10 +1,12 @@
 import {
   cleanLengthForRawLength,
   decodeNidekNativeTrace,
+  HEADERLESS_RIMLESS_CLEAN_FRAME_LENGTH,
   isPlausibleNidekNativeHeader,
   MIN_CLEAN_FRAME_LENGTH,
   NIDEK_FRAME_HEADER_LENGTH,
   NIDEK_FRAME_PREFIX,
+  NIDEK_FRAME_PREFIX_PARTIAL,
   traceSummary,
   type DecodedNidekTrace,
 } from "@/lib/nidek-native";
@@ -81,9 +83,10 @@ export async function readLt900Trace(
   if (!statusB) throw new Error("Timed out waiting for final status part.");
   emit({ phase: "status", message: `Status part ${hex(statusB)}.`, progress: 48 });
   await sendAck(transport, "final status part");
+  const initialFrameMarker = findNativeFrameMarker(statusB);
 
   emit({ phase: "capture", message: "Waiting for native frame marker.", progress: 50 });
-  const rawFrame = await captureNativeFrame(transport, emit);
+  const rawFrame = await captureNativeFrame(transport, emit, initialFrameMarker);
 
   emit({ phase: "decode", message: "Decoding native trace.", progress: 92 });
   const trace = decodeNidekNativeTrace(rawFrame);
@@ -105,33 +108,86 @@ async function sendAck(transport: WebSerialTransport, label: string) {
 async function captureNativeFrame(
   transport: WebSerialTransport,
   emit: (event: Lt900Event) => void,
+  initialFrameMarker: number | null = null,
 ): Promise<Uint8Array> {
   const rawFrame: number[] = [];
+  const headerlessFrame: number[] = [];
+  const rejectedHeaders: number[][] = [];
   const markerDeadline = Date.now() + 30_000;
+  let blockCount = 0;
+
+  const appendHeaderlessByte = async (byte: number) => {
+    headerlessFrame.push(byte);
+    if (headerlessFrame.length % 129 === 0) {
+      blockCount += 1;
+      await sendAck(transport, `headerless block ${blockCount}`);
+      emit({
+        phase: "capture",
+        message: `Captured headerless block ${blockCount}.`,
+        progress: Math.min(
+          88,
+          50 + Math.round((cleanLengthForRawLength(headerlessFrame.length) / HEADERLESS_RIMLESS_CLEAN_FRAME_LENGTH) * 35),
+        ),
+      });
+    }
+  };
+
+  const appendHeaderlessBytes = async (bytes: number[]) => {
+    for (const byte of bytes) await appendHeaderlessByte(byte);
+  };
+
+  if (initialFrameMarker !== null) {
+    const header = await readHeaderAfterMarker(transport, initialFrameMarker, markerDeadline);
+    if (header && isPlausibleNidekNativeHeader(header)) {
+      rawFrame.push(...header);
+      emit({ phase: "capture", message: `Native frame header found from status boundary: ${hex(header)}.`, progress: 58 });
+    } else if (header) {
+      rejectedHeaders.push(header);
+      await appendHeaderlessBytes(header);
+    }
+  }
 
   while (Date.now() < markerDeadline) {
+    if (rawFrame.length > 0) break;
+    if (cleanLengthForRawLength(headerlessFrame.length) >= HEADERLESS_RIMLESS_CLEAN_FRAME_LENGTH) {
+      emit({ phase: "capture", message: "Headerless rimless frame captured.", progress: 90 });
+      return Uint8Array.from(headerlessFrame);
+    }
+
     const byte = await transport.queue.readByte(Math.max(1, markerDeadline - Date.now()));
     if (byte === null) break;
 
-    if (byte !== NIDEK_FRAME_PREFIX) continue;
+    if (!isNativeFrameMarker(byte)) {
+      await appendHeaderlessByte(byte);
+      continue;
+    }
 
-    const rest = await transport.queue.readBytes(NIDEK_FRAME_HEADER_LENGTH - 1, Math.max(1, markerDeadline - Date.now()));
-    if (!rest) break;
-
-    const header = [byte, ...Array.from(rest)];
+    const header = await readHeaderAfterMarker(transport, byte, markerDeadline);
+    if (!header) break;
     if (isPlausibleNidekNativeHeader(header)) {
       rawFrame.push(...header);
       emit({ phase: "capture", message: `Native frame header found: ${hex(header)}.`, progress: 58 });
       break;
     }
+    rejectedHeaders.push(header);
+    await appendHeaderlessBytes(header);
   }
 
   if (rawFrame.length === 0) {
-    throw new Error("Timed out waiting for a plausible native frame header.");
+    if (cleanLengthForRawLength(headerlessFrame.length) >= HEADERLESS_RIMLESS_CLEAN_FRAME_LENGTH) {
+      emit({ phase: "capture", message: "Headerless rimless frame captured.", progress: 90 });
+      return Uint8Array.from(headerlessFrame);
+    }
+    const detail =
+      rejectedHeaders.length > 0
+        ? ` Last candidate header${rejectedHeaders.length === 1 ? "" : "s"}: ${rejectedHeaders.slice(-3).map((header) => hex(header)).join(" | ")}.`
+        : "";
+    throw new Error(
+      `Timed out waiting for a plausible native frame header. Captured ${cleanLengthForRawLength(headerlessFrame.length)} possible headerless rimless bytes.${detail}`,
+    );
   }
 
   const captureStarted = Date.now();
-  let blockCount = 0;
 
   while (Date.now() - captureStarted < 60_000) {
     const cleanLength = cleanLengthForRawLength(rawFrame.length);
@@ -168,6 +224,25 @@ async function captureNativeFrame(
   }
 
   return Uint8Array.from(rawFrame);
+}
+
+function readHeaderAfterMarker(
+  transport: WebSerialTransport,
+  marker: number,
+  deadline: number,
+): Promise<number[] | null> {
+  return transport.queue
+    .readBytes(NIDEK_FRAME_HEADER_LENGTH - 1, Math.max(1, deadline - Date.now()))
+    .then((rest) => (rest ? [marker, ...Array.from(rest)] : null));
+}
+
+function findNativeFrameMarker(bytes: Uint8Array) {
+  const marker = Array.from(bytes).find(isNativeFrameMarker);
+  return marker ?? null;
+}
+
+function isNativeFrameMarker(byte: number) {
+  return byte === NIDEK_FRAME_PREFIX || byte === NIDEK_FRAME_PREFIX_PARTIAL;
 }
 
 function formatByte(byte: number | null) {

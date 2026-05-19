@@ -146,6 +146,10 @@ The preview should also show useful trace metadata, including at least:
 - `CIRC`
 - `FCRV`
 
+The preview must also show any user-entered drill holes as center-reference
+overlays. A drill hole for both eyes uses right-eye coordinates and is mirrored
+onto the left lens in the preview.
+
 ## OMA Export
 
 After a successful trace, the app must generate the OMA file client-side and
@@ -179,6 +183,16 @@ The app must generate both 400-point and 1000-point OMA outputs:
   details.
 - The 400-point trace is created by resampling the closed 1000-point polar
   radius sequence to 400 equiangular points.
+
+Optional drill holes are generated as minimal Vision Council `DRILLE` records:
+
+```text
+DRILLE=eye;C;x;y;diameter
+```
+
+Each round hole is written as its own record. Coordinates are center-reference
+millimeter values from the lens box center. Holes are written to both the
+400-point and 1000-point OMA outputs. Holes are cleared when a new trace starts.
 
 ## Suggested Client Modules
 
