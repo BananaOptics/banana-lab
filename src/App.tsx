@@ -1,11 +1,17 @@
-import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Cable,
   CheckCircle2,
   ChevronDown,
   Download,
-  FileDown,
   FileUp,
   Loader2,
   Play,
@@ -116,6 +122,7 @@ export function App() {
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
   const [error, setError] = useState<AppError | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
   const [workflow, setWorkflow] = useState<WorkflowMode>("capture");
   const [documentSource, setDocumentSource] = useState<DocumentSource>({
     type: "none",
@@ -134,7 +141,6 @@ export function App() {
       return null;
     }
   });
-  const [calOpen, setCalOpen] = useState(false);
   const [calDraft, setCalDraft] = useState("");
   const [jobInfo, setJobInfo] = useState<OmaJobInfo>({
     job: "",
@@ -190,7 +196,7 @@ export function App() {
   );
   const [busy, setBusy] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
-  const [logExpanded, setLogExpanded] = useState(false);
+  const [downloadPointCount, setDownloadPointCount] = useState<400 | 1000>(400);
   const transportRef = useRef<WebSerialTransport | null>(null);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -225,6 +231,7 @@ export function App() {
     () => omaFiles.find((file) => file.pointCount === 1000) ?? null,
     [omaFiles],
   );
+  const selectedOma = downloadPointCount === 400 ? primaryOma : secondaryOma;
 
   useEffect(() => {
     const closeTransport = () => {
@@ -243,6 +250,10 @@ export function App() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  useEffect(() => {
+    if (trace) setCaptureDialogOpen(false);
+  }, [trace]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -535,12 +546,10 @@ export function App() {
     const px = CAL_REF_PX / mm;
     setPxPerMm(px);
     try { localStorage.setItem(PXPERMM_KEY, String(px)); } catch { /* ignore */ }
-    setCalOpen(false);
   };
 
   const isActivePhase =
     phase !== "idle" && phase !== "complete" && phase !== "error";
-  const showStatusBox = connected || phase !== "idle";
   const showReset = trace !== null || error !== null;
 
   return (
@@ -566,23 +575,8 @@ export function App() {
                 </Badge>
               )}
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <div className="flex overflow-hidden rounded-md border text-xs font-medium">
-                <button
-                  className={`px-3 py-1.5 transition-colors ${workflow === "capture" ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
-                  onClick={() => setWorkflow("capture")}
-                >
-                  Capture
-                </button>
-                <button
-                  className={`border-l px-3 py-1.5 transition-colors ${workflow === "editor" ? "bg-primary text-primary-foreground" : "hover:bg-accent"} disabled:cursor-not-allowed disabled:opacity-40`}
-                  onClick={() => trace && setWorkflow("editor")}
-                  disabled={!trace}
-                >
-                  OMA editor
-                </button>
-              </div>
-              {workflow === "capture" && (
+            {trace && workflow === "capture" && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-2">
                   <label
                     htmlFor="tracer-model"
@@ -604,8 +598,8 @@ export function App() {
                     ))}
                   </select>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -616,11 +610,13 @@ export function App() {
               className="hidden"
               onChange={handleOmaFileSelected}
             />
+            {trace && (
             <Button variant="outline" onClick={openOmaFilePicker} disabled={busy}>
               <FileUp className="h-4 w-4" />
               Open OMA
             </Button>
-            {workflow === "capture" && (
+            )}
+            {trace && workflow === "capture" && (
               <>
                 {!connected ? (
                   <Button onClick={connect} disabled={!serialSupported || busy}>
@@ -664,7 +660,7 @@ export function App() {
                 Reset
               </Button>
             )}
-            {workflow === "capture" && !connected && (
+            {trace && workflow === "capture" && !connected && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -689,7 +685,7 @@ export function App() {
           </div>
         </header>
 
-        {error ? (
+        {error && !captureDialogOpen ? (
           <Alert variant="destructive" className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
             <AlertCircle className="mt-0.5 h-4 w-4" />
             <AlertTitle className="mb-0">{error.title}</AlertTitle>
@@ -717,7 +713,132 @@ export function App() {
           </Alert>
         ) : null}
 
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+        {!trace ? (
+          <section className="flex min-h-[420px] items-center justify-center py-8">
+            <div className="grid w-full max-w-3xl gap-4 sm:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Trace form</CardTitle>
+                  <CardDescription>
+                    Connect the tracer, choose the model, and read a new trace.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    className="w-full"
+                    onClick={() => {
+                      setWorkflow("capture");
+                      setCaptureDialogOpen(true);
+                    }}
+                  >
+                    <Cable className="h-4 w-4" />
+                    Trace form
+                  </Button>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>From file</CardTitle>
+                  <CardDescription>
+                    Open an existing OMA file and continue editing it.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={openOmaFilePicker}
+                    disabled={busy}
+                  >
+                    <FileUp className="h-4 w-4" />
+                    Open OMA
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          </section>
+        ) : (
+          <>
+            {workflow === "editor" && (
+              <div className="flex justify-end">
+                <div className="relative" ref={downloadMenuRef}>
+                  <Button
+                    variant="outline"
+                    disabled={!primaryOma && !secondaryOma}
+                    onClick={() => setDownloadMenuOpen((o) => !o)}
+                    aria-expanded={downloadMenuOpen}
+                  >
+                    <Download className="h-4 w-4" />
+                    Download
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                  {downloadMenuOpen && (
+                    <div className="absolute right-0 top-full z-20 mt-2 w-[320px] rounded-md border bg-popover p-4 shadow-md">
+                      <div className="space-y-4">
+                        <div className="space-y-1.5">
+                          <label
+                            htmlFor="oma-job"
+                            className="text-xs font-medium text-muted-foreground"
+                          >
+                            File name
+                          </label>
+                          <input
+                            id="oma-job"
+                            value={jobInfo.job}
+                            onChange={(e) =>
+                              setJobInfo((p) => ({ ...p, job: e.target.value }))
+                            }
+                            className="w-full rounded-md border bg-background px-3 py-1.5 font-mono text-xs"
+                            spellCheck={false}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="text-xs font-medium text-muted-foreground">
+                            OMA points
+                          </div>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="radio"
+                              name="download-point-count"
+                              value="400"
+                              checked={downloadPointCount === 400}
+                              onChange={() => setDownloadPointCount(400)}
+                              disabled={!primaryOma}
+                            />
+                            400
+                          </label>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input
+                              type="radio"
+                              name="download-point-count"
+                              value="1000"
+                              checked={downloadPointCount === 1000}
+                              onChange={() => setDownloadPointCount(1000)}
+                              disabled={!secondaryOma}
+                            />
+                            1000
+                          </label>
+                        </div>
+
+                        <Button
+                          className="w-full"
+                          disabled={!selectedOma}
+                          onClick={() => {
+                            selectedOma && downloadOma(selectedOma);
+                            setDownloadMenuOpen(false);
+                          }}
+                        >
+                          <Download className="h-4 w-4" />
+                          Download
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <div className="flex flex-col gap-6">
             <Card>
               <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
@@ -794,363 +915,150 @@ export function App() {
                 )}
               </CardContent>
             </Card>
-
-            {workflow === "editor" && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Frame details</CardTitle>
-                <CardDescription>
-                  Frame measurements and metadata written into the OMA file.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {trace && (
-                    <>
-                      <FrameReadout
-                        label="Captured side"
-                        field="Side"
-                        value={{ R: "Right lens", L: "Left lens", B: "Both lenses" }[trace.metadata.side] ?? trace.metadata.side}
-                      />
-                      <FrameReadout
-                        label="Lens width"
-                        field="HBOX"
-                        value={`${formatNumber(trace.stats.hboxMm, 2)} mm`}
-                      />
-                      <FrameReadout
-                        label="Lens height"
-                        field="VBOX"
-                        value={`${formatNumber(trace.stats.vboxMm, 2)} mm`}
-                      />
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="frame-dbl" label="Bridge distance" field="DBL" />
-                        <div className="relative">
-                          <input
-                            id="frame-dbl"
-                            type="text"
-                            inputMode="decimal"
-                            value={pairDblInput}
-                            onChange={(e) => updateEditableDbl(e.target.value)}
-                            className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm"
-                          />
-                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                            mm
-                          </span>
-                        </div>
-                      </div>
-                      <FrameReadout
-                        label="Circumference"
-                        field="CIRC"
-                        value={`${formatNumber(trace.stats.circMm, 2)} mm`}
-                      />
-                      <FrameReadout
-                        label="Base curve"
-                        field="FCRV"
-                        value={formatNumber(trace.metadata.fcrv, 1)}
-                      />
-                    </>
-                  )}
-                  <div className="space-y-1.5">
-                    <FieldLabel htmlFor="oma-ven" label="Frame brand" field="VEN" />
-                    <input
-                      id="oma-ven"
-                      value={jobInfo.ven}
-                      onChange={(e) =>
-                        setJobInfo((p) => ({ ...p, ven: e.target.value }))
-                      }
-                      placeholder="e.g. Ray-Ban"
-                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <FieldLabel htmlFor="oma-model" label="Frame model" field="MODEL" />
-                    <input
-                      id="oma-model"
-                      value={jobInfo.model}
-                      onChange={(e) =>
-                        setJobInfo((p) => ({ ...p, model: e.target.value }))
-                      }
-                      placeholder="e.g. RB5154 Clubmaster"
-                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <FieldLabel htmlFor="oma-wrapang" label="Wrap angle (°)" field="WRAPANG" />
-                    <input
-                      id="oma-wrapang"
-                      type="number"
-                      step="0.1"
-                      value={jobInfo.wrapang}
-                      onChange={(e) =>
-                        setJobInfo((p) => ({ ...p, wrapang: e.target.value }))
-                      }
-                      placeholder="e.g. 5.0"
-                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <FieldLabel htmlFor="oma-panto" label="Pantoscopic tilt (°)" field="PANTO" />
-                    <input
-                      id="oma-panto"
-                      type="number"
-                      step="0.1"
-                      value={jobInfo.panto}
-                      onChange={(e) =>
-                        setJobInfo((p) => ({ ...p, panto: e.target.value }))
-                      }
-                      placeholder="e.g. 8.0"
-                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            )}
           </div>
 
           <div className="space-y-6">
-            <Card>
-              <CardContent className="space-y-4 pt-5">
-                {showStatusBox && (
-                  <div className="rounded-md border bg-muted/30 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          {phase === "complete" ? (
-                            <CheckCircle2 className="h-4 w-4 text-[hsl(var(--success))]" />
-                          ) : (
-                            <PlugZap className="h-4 w-4 text-muted-foreground" />
-                          )}
-                          {phaseLabels[phase]}
-                        </div>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          {progress}%
-                        </span>
-                      </div>
-                      <Progress value={progress} className="mt-3" />
-                      {statusText && (
-                        <p className="mt-3 text-sm text-muted-foreground">
-                          {statusText}
-                        </p>
-                      )}
-                  </div>
-                )}
-
-                {!showStatusBox && workflow === "capture" && (
-                  <div className="rounded-md border bg-muted/30 p-3">
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <PlugZap className="h-4 w-4 text-muted-foreground" />
-                      Ready
-                    </div>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Connect a tracer and read a trace, or open an OMA file.
-                    </p>
-                  </div>
-                )}
-
-                {workflow === "editor" && (
-                <div className="space-y-2">
-                  {primaryOma && (
-                    <div className="space-y-1">
-                      <label
-                        htmlFor="oma-job"
-                        className="text-xs font-medium text-muted-foreground"
-                      >
-                        File name
-                      </label>
-                      <input
-                        id="oma-job"
-                        value={jobInfo.job}
-                        onChange={(e) =>
-                          setJobInfo((p) => ({ ...p, job: e.target.value }))
-                        }
-                        className="w-full rounded-md border bg-background px-3 py-1.5 font-mono text-xs"
-                        spellCheck={false}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Saved as <span className="font-mono">{jobInfo.job}_400.oma</span>
-                      </p>
-                    </div>
-                  )}
-                  <div className="relative" ref={downloadMenuRef}>
-                    <div className="flex">
-                      <Button
-                        className="flex-1 rounded-r-none"
-                        disabled={!primaryOma}
-                        onClick={() => {
-                          primaryOma && downloadOma(primaryOma);
-                          setDownloadMenuOpen(false);
-                        }}
-                      >
-                        <Download className="h-4 w-4" />
-                        Download OMA
-                      </Button>
-                      <Button
-                        className="rounded-l-none border-l px-2.5"
-                        disabled={!primaryOma && !secondaryOma}
-                        onClick={() => setDownloadMenuOpen((o) => !o)}
-                        aria-label="More download options"
-                      >
-                        <ChevronDown className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {downloadMenuOpen && (
-                      <div className="absolute right-0 top-full z-10 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
-                        <button
-                          className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!primaryOma}
-                          onClick={() => {
-                            primaryOma && downloadOma(primaryOma);
-                            setDownloadMenuOpen(false);
-                          }}
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          400-point OMA
-                        </button>
-                        <button
-                          className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={!secondaryOma}
-                          onClick={() => {
-                            secondaryOma && downloadOma(secondaryOma);
-                            setDownloadMenuOpen(false);
-                          }}
-                        >
-                          <FileDown className="h-3.5 w-3.5" />
-                          1000-point OMA
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {!primaryOma && !secondaryOma && (
-                    <p className="text-center text-xs text-muted-foreground">
-                      Open or capture an OMA draft first to enable downloads.
-                    </p>
-                  )}
-                </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-                <button
-                  className="flex items-center gap-2 text-left"
-                  onClick={() => setCalOpen((o) => !o)}
-                >
-                  <ChevronDown
-                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${calOpen ? "" : "-rotate-90"}`}
-                  />
-                  <div>
-                    <CardTitle>Screen scale</CardTitle>
-                    <CardDescription className="mt-1">
-                      {pxPerMm
-                        ? `Calibrated (${pxPerMm.toFixed(3)} px/mm)`
-                        : "Not calibrated — 1:1 view disabled"}
+            {workflow === "editor" && (
+              <>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Frame details</CardTitle>
+                    <CardDescription>
+                      Frame measurements and metadata written into the OMA file.
                     </CardDescription>
-                  </div>
-                </button>
-              </CardHeader>
-              {calOpen && (
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-muted-foreground">
-                    Measure the line below with a physical ruler and enter its
-                    length to enable the 1:1 preview.
-                  </p>
-                  <div className="flex flex-col items-start gap-1">
-                    <div
-                      style={{ width: `${CAL_REF_PX}px`, height: "6px" }}
-                      className="rounded-full bg-primary"
-                    />
-                    <span className="text-[10px] text-muted-foreground">
-                      {CAL_REF_PX} px reference line
-                    </span>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label
-                      htmlFor="cal-cm"
-                      className="text-sm font-medium"
-                    >
-                      Line length (mm)
-                    </label>
-                    <input
-                      id="cal-cm"
-                      type="number"
-                      step="0.01"
-                      min="0.1"
-                      value={calDraft}
-                      onChange={(e) => setCalDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveCalibration();
-                      }}
-                      placeholder="e.g. 53"
-                      className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <Button
-                    onClick={saveCalibration}
-                    disabled={!calDraft || parseFloat(calDraft) <= 0}
-                    className="w-full"
-                  >
-                    Save
-                  </Button>
-                </CardContent>
-              )}
-            </Card>
-
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-                <button
-                  className="flex items-center gap-2 text-left"
-                  onClick={() => setLogExpanded((o) => !o)}
-                >
-                  <ChevronDown
-                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${logExpanded ? "" : "-rotate-90"}`}
-                  />
-                  <div>
-                    <CardTitle>Protocol Log</CardTitle>
-                    <CardDescription className="mt-1">
-                      Recent host and tracer messages.
-                    </CardDescription>
-                  </div>
-                </button>
-                {logExpanded && logs.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setLogs([])}
-                    className="shrink-0 text-xs text-muted-foreground"
-                  >
-                    Clear
-                  </Button>
-                )}
-              </CardHeader>
-              {logExpanded && (
-                <CardContent>
-                  <div className="h-[320px] overflow-auto rounded-md border bg-[hsl(var(--log-background))] p-3 font-mono text-xs text-[hsl(var(--log-foreground))]">
-                    {logs.length === 0 ? (
-                      <div className="text-[hsl(var(--log-muted))]">
-                        No serial activity yet.
-                      </div>
-                    ) : (
-                      <div className="space-y-1">
-                        {logs.map((entry) => (
-                          <div
-                            key={entry.id}
-                            className={logClassName(entry.level)}
-                          >
-                            {entry.message}
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-4">
+                      {trace && (
+                        <>
+                          <FrameReadout
+                            label="Captured side"
+                            field="Side"
+                            value={{ R: "Right lens", L: "Left lens", B: "Both lenses" }[trace.metadata.side] ?? trace.metadata.side}
+                          />
+                          <FrameReadout
+                            label="Lens width"
+                            field="HBOX"
+                            value={`${formatNumber(trace.stats.hboxMm, 2)} mm`}
+                          />
+                          <FrameReadout
+                            label="Lens height"
+                            field="VBOX"
+                            value={`${formatNumber(trace.stats.vboxMm, 2)} mm`}
+                          />
+                          <div className="space-y-1.5">
+                            <FieldLabel htmlFor="frame-dbl" label="Bridge distance" field="DBL" />
+                            <div className="relative">
+                              <input
+                                id="frame-dbl"
+                                type="text"
+                                inputMode="decimal"
+                                value={pairDblInput}
+                                onChange={(e) => updateEditableDbl(e.target.value)}
+                                className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm"
+                              />
+                              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                                mm
+                              </span>
+                            </div>
                           </div>
-                        ))}
-                        <div ref={logEndRef} />
+                          <FrameReadout
+                            label="Circumference"
+                            field="CIRC"
+                            value={`${formatNumber(trace.stats.circMm, 2)} mm`}
+                          />
+                          <FrameReadout
+                            label="Base curve"
+                            field="FCRV"
+                            value={formatNumber(trace.metadata.fcrv, 1)}
+                          />
+                        </>
+                      )}
+                      <div className="space-y-1.5">
+                        <FieldLabel htmlFor="oma-ven" label="Frame brand" field="VEN" />
+                        <input
+                          id="oma-ven"
+                          value={jobInfo.ven}
+                          onChange={(e) =>
+                            setJobInfo((p) => ({ ...p, ven: e.target.value }))
+                          }
+                          placeholder="e.g. Ray-Ban"
+                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                        />
                       </div>
-                    )}
-                  </div>
-                </CardContent>
-              )}
-            </Card>
+                      <div className="space-y-1.5">
+                        <FieldLabel htmlFor="oma-model" label="Frame model" field="MODEL" />
+                        <input
+                          id="oma-model"
+                          value={jobInfo.model}
+                          onChange={(e) =>
+                            setJobInfo((p) => ({ ...p, model: e.target.value }))
+                          }
+                          placeholder="e.g. RB5154 Clubmaster"
+                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <FieldLabel htmlFor="oma-wrapang" label="Wrap angle (deg)" field="WRAPANG" />
+                        <input
+                          id="oma-wrapang"
+                          type="number"
+                          step="0.1"
+                          value={jobInfo.wrapang}
+                          onChange={(e) =>
+                            setJobInfo((p) => ({ ...p, wrapang: e.target.value }))
+                          }
+                          placeholder="e.g. 5.0"
+                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <FieldLabel htmlFor="oma-panto" label="Pantoscopic tilt (deg)" field="PANTO" />
+                        <input
+                          id="oma-panto"
+                          type="number"
+                          step="0.1"
+                          value={jobInfo.panto}
+                          onChange={(e) =>
+                            setJobInfo((p) => ({ ...p, panto: e.target.value }))
+                          }
+                          placeholder="e.g. 8.0"
+                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            )}
           </div>
-        </section>
+            </section>
+          </>
+        )}
       </div>
 
+      {captureDialogOpen && (
+        <CaptureDialog
+          tracerModel={tracerModel}
+          connected={connected}
+          serialSupported={serialSupported}
+          busy={busy}
+          error={error}
+          phase={phase}
+          progress={progress}
+          statusText={statusText}
+          portInfo={portInfo}
+          logs={logs}
+          logEndRef={logEndRef}
+          onTracerModelChange={setTracerModel}
+          onConnect={connect}
+          onDisconnect={disconnect}
+          onReadTrace={startTrace}
+          onReleasePorts={releasePorts}
+          onClearLogs={() => setLogs([])}
+          onClose={() => setCaptureDialogOpen(false)}
+        />
+      )}
       {drillDialogOpen && trace && (
         <DrillDialog
           trace={trace}
@@ -1166,7 +1074,11 @@ export function App() {
       {settingsOpen && (
         <SettingsDialog
           theme={theme}
+          pxPerMm={pxPerMm}
+          calDraft={calDraft}
           onThemeChange={setTheme}
+          onCalDraftChange={setCalDraft}
+          onSaveCalibration={saveCalibration}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -1174,13 +1086,260 @@ export function App() {
   );
 }
 
+function CaptureDialog({
+  tracerModel,
+  connected,
+  serialSupported,
+  busy,
+  error,
+  phase,
+  progress,
+  statusText,
+  portInfo,
+  logs,
+  logEndRef,
+  onTracerModelChange,
+  onConnect,
+  onDisconnect,
+  onReadTrace,
+  onReleasePorts,
+  onClearLogs,
+  onClose,
+}: {
+  tracerModel: TracerModel;
+  connected: boolean;
+  serialSupported: boolean;
+  busy: boolean;
+  error: AppError | null;
+  phase: Lt900Phase;
+  progress: number;
+  statusText: string;
+  portInfo: string | null;
+  logs: UiLogEntry[];
+  logEndRef: RefObject<HTMLDivElement>;
+  onTracerModelChange: (value: TracerModel) => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onReadTrace: () => void;
+  onReleasePorts: () => void;
+  onClearLogs: () => void;
+  onClose: () => void;
+}) {
+  const isActive = phase !== "idle" && phase !== "complete" && phase !== "error";
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isActive) onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isActive, onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--overlay)/0.56)] p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="capture-title"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !isActive) onClose();
+      }}
+    >
+      <div className="w-full max-w-2xl rounded-lg border bg-card text-card-foreground shadow-2xl">
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <h2 id="capture-title" className="text-sm font-semibold">
+            Trace form
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isActive}
+            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Close trace form"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-5 px-5 py-5">
+          {error && (
+            <Alert variant="destructive" className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+              <AlertCircle className="mt-0.5 h-4 w-4" />
+              <AlertTitle className="mb-0">{error.title}</AlertTitle>
+              <AlertDescription className="col-start-2">
+                {error.message}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {!serialSupported && (
+            <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+              <AlertCircle className="mt-0.5 h-4 w-4" />
+              <AlertTitle className="mb-0">Tracer capture unavailable</AlertTitle>
+              <AlertDescription className="col-start-2">
+                Web Serial requires desktop Chrome or Edge.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="space-y-1.5">
+            <label
+              htmlFor="dialog-tracer-model"
+              className="text-sm font-medium"
+            >
+              Tracer model
+            </label>
+            <select
+              id="dialog-tracer-model"
+              value={tracerModel}
+              onChange={(e) =>
+                onTracerModelChange(e.target.value as TracerModel)
+              }
+              disabled={connected}
+              className="h-9 w-full rounded-md border bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {TRACER_MODELS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="rounded-md border bg-muted/30 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {phase === "complete" ? (
+                  <CheckCircle2 className="h-4 w-4 text-[hsl(var(--success))]" />
+                ) : (
+                  <PlugZap className="h-4 w-4 text-muted-foreground" />
+                )}
+                {connected ? phaseLabels[phase] : "Disconnected"}
+              </div>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {progress}%
+              </span>
+            </div>
+            <Progress value={progress} className="mt-3" />
+            <p className="mt-3 text-sm text-muted-foreground">
+              {statusText ||
+                (connected
+                  ? "Serial port connected. Ready to read a trace."
+                  : "Connect a tracer to begin.")}
+            </p>
+            {portInfo && (
+              <p className="mt-2 text-xs text-muted-foreground">{portInfo}</p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {!connected ? (
+              <Button
+                onClick={onConnect}
+                disabled={!serialSupported || busy}
+                className="flex-1"
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Cable className="h-4 w-4" />
+                )}
+                Connect tracer
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={onDisconnect}
+                disabled={busy}
+                className="flex-1"
+              >
+                <Unplug className="h-4 w-4" />
+                Disconnect
+              </Button>
+            )}
+            <Button
+              onClick={onReadTrace}
+              disabled={!connected || busy}
+              className="flex-1"
+            >
+              {busy && phase !== "idle" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4" />
+              )}
+              Read trace
+            </Button>
+          </div>
+
+          {!connected && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onReleasePorts}
+              disabled={!serialSupported || busy}
+              className="w-full text-muted-foreground"
+            >
+              <Unplug className="h-3.5 w-3.5" />
+              Release ports
+            </Button>
+          )}
+
+          <div className="space-y-3 border-t pt-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">Protocol Log</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Recent host and tracer messages.
+                </p>
+              </div>
+              {logs.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onClearLogs}
+                  className="shrink-0 text-xs text-muted-foreground"
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+            <div className="h-[240px] overflow-auto rounded-md border bg-[hsl(var(--log-background))] p-3 font-mono text-xs text-[hsl(var(--log-foreground))]">
+              {logs.length === 0 ? (
+                <div className="text-[hsl(var(--log-muted))]">
+                  No serial activity yet.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {logs.map((entry) => (
+                    <div key={entry.id} className={logClassName(entry.level)}>
+                      {entry.message}
+                    </div>
+                  ))}
+                  <div ref={logEndRef} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsDialog({
   theme,
+  pxPerMm,
+  calDraft,
   onThemeChange,
+  onCalDraftChange,
+  onSaveCalibration,
   onClose,
 }: {
   theme: ThemeMode;
+  pxPerMm: number | null;
+  calDraft: string;
   onThemeChange: (value: ThemeMode) => void;
+  onCalDraftChange: (value: string) => void;
+  onSaveCalibration: () => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -1224,6 +1383,56 @@ function SettingsDialog({
               </div>
             </div>
             <ThemeSelect value={theme} onChange={onThemeChange} />
+          </div>
+          <div className="border-t pt-5">
+            <div className="mb-3">
+              <div className="text-sm font-medium">Screen scale</div>
+              <div className="text-xs text-muted-foreground">
+                {pxPerMm
+                  ? `Calibrated (${pxPerMm.toFixed(3)} px/mm)`
+                  : "Not calibrated - 1:1 view disabled"}
+              </div>
+            </div>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Measure the line below with a physical ruler and enter its
+                length to enable the 1:1 preview.
+              </p>
+              <div className="flex flex-col items-start gap-1">
+                <div
+                  style={{ width: `${CAL_REF_PX}px`, height: "6px" }}
+                  className="max-w-full rounded-full bg-primary"
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  {CAL_REF_PX} px reference line
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="cal-mm" className="text-sm font-medium">
+                  Line length (mm)
+                </label>
+                <input
+                  id="cal-mm"
+                  type="number"
+                  step="0.01"
+                  min="0.1"
+                  value={calDraft}
+                  onChange={(e) => onCalDraftChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onSaveCalibration();
+                  }}
+                  placeholder="e.g. 53"
+                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                />
+              </div>
+              <Button
+                onClick={onSaveCalibration}
+                disabled={!calDraft || parseFloat(calDraft) <= 0}
+                className="w-full"
+              >
+                Save
+              </Button>
+            </div>
           </div>
         </div>
       </div>
