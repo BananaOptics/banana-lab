@@ -9,6 +9,11 @@ const CANVAS_W = 460;
 const CANVAS_H = 420;
 const CX = CANVAS_W / 2;
 const CY = CANVAS_H / 2;
+const DIALOG_MARGIN = 16;
+const DIALOG_MAX_W = 1100;
+const DIALOG_DEFAULT_H = 500;
+
+type DialogPosition = { x: number; y: number };
 
 interface DrillDialogProps {
   trace: DecodedNidekTrace;
@@ -29,24 +34,41 @@ export function DrillDialog({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoverCoords, setHoverCoords] = useState<{ x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState<"fit" | "1:1">("fit");
-  const [pos, setPos] = useState(() => ({
-    x: Math.max(0, window.innerWidth / 2 - 450),
-    y: Math.max(0, window.innerHeight / 2 - 250),
-  }));
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [pos, setPos] = useState(getInitialDialogPosition);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    lastPos: DialogPosition;
+  } | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  const getDialogBounds = () => {
+    const rect = dialogRef.current?.getBoundingClientRect();
+    return {
+      width: rect?.width ?? Math.min(DIALOG_MAX_W, Math.max(0, window.innerWidth - DIALOG_MARGIN * 2)),
+      height: rect?.height ?? DIALOG_DEFAULT_H,
+    };
+  };
 
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
-    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y };
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: pos.x, origY: pos.y, lastPos: pos };
     const onMove = (me: MouseEvent) => {
       if (!dragRef.current) return;
-      setPos({
+      const nextPos = clampDialogPosition({
         x: dragRef.current.origX + me.clientX - dragRef.current.startX,
         y: dragRef.current.origY + me.clientY - dragRef.current.startY,
-      });
+      }, getDialogBounds());
+      dragRef.current.lastPos = nextPos;
+      setPos(nextPos);
     };
     const onUp = () => {
+      if (dragRef.current) {
+        setPos(dragRef.current.lastPos);
+      }
       dragRef.current = null;
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -54,6 +76,16 @@ export function DrillDialog({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
+
+  useEffect(() => {
+    const centerInViewport = () => {
+      setPos(getCenteredDialogPosition(getDialogBounds()));
+    };
+
+    centerInViewport();
+    window.addEventListener("resize", centerInViewport);
+    return () => window.removeEventListener("resize", centerInViewport);
+  }, []);
 
   // Close on Escape
   useEffect(() => {
@@ -161,7 +193,8 @@ export function DrillDialog({
       }}
     >
       <div
-        className="absolute flex max-h-[92vh] w-full max-w-[1100px] flex-col rounded-lg border bg-card text-card-foreground shadow-2xl"
+        ref={dialogRef}
+        className="absolute flex max-h-[92vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col rounded-lg border bg-card text-card-foreground shadow-2xl"
         style={{ left: pos.x, top: pos.y }}
       >
         {/* Header */}
@@ -511,4 +544,32 @@ function createId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `d_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getInitialDialogPosition(): DialogPosition {
+  const width = Math.min(DIALOG_MAX_W, Math.max(0, window.innerWidth - DIALOG_MARGIN * 2));
+  return getCenteredDialogPosition({ width, height: DIALOG_DEFAULT_H });
+}
+
+function getCenteredDialogPosition(size: { width: number; height: number }): DialogPosition {
+  return clampDialogPosition(
+    {
+      x: (window.innerWidth - size.width) / 2,
+      y: (window.innerHeight - size.height) / 2,
+    },
+    size,
+  );
+}
+
+function clampDialogPosition(
+  pos: DialogPosition,
+  size: { width: number; height: number },
+): DialogPosition {
+  const maxX = Math.max(DIALOG_MARGIN, window.innerWidth - size.width - DIALOG_MARGIN);
+  const maxY = Math.max(DIALOG_MARGIN, window.innerHeight - size.height - DIALOG_MARGIN);
+
+  return {
+    x: Math.min(Math.max(pos.x, DIALOG_MARGIN), maxX),
+    y: Math.min(Math.max(pos.y, DIALOG_MARGIN), maxY),
+  };
 }

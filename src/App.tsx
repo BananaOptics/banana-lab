@@ -691,7 +691,7 @@ export function App() {
                   )}
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
                 <TracePreview
                   trace={pairPreviewTrace ?? trace}
                   drillRecords={drillRecords}
@@ -700,6 +700,37 @@ export function App() {
                   zoom={zoom}
                   pxPerMm={pxPerMm}
                 />
+                {trace && (
+                  <div className="border-t pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-sm font-semibold">Drill records</h2>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {drillRecords.length > 0
+                            ? `${drillRecords.length} record${drillRecords.length !== 1 ? "s" : ""}`
+                            : "No drill records added."}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setDrillDialogOpen(true)}
+                      >
+                        Edit
+                      </Button>
+                    </div>
+
+                    {invalidDrillRecordIds.size > 0 && (
+                      <Alert variant="destructive" className="mt-3 grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 py-2">
+                        <AlertCircle className="mt-0.5 h-4 w-4" />
+                        <AlertTitle className="mb-0 text-sm">Check drill placement</AlertTitle>
+                        <AlertDescription className="col-start-2 text-xs">
+                          One or more holes appear outside the lens outline or have an invalid diameter.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -793,38 +824,6 @@ export function App() {
                           {statusText}
                         </p>
                       )}
-                  </div>
-                )}
-
-                {trace && (
-                  <div className="border-t pt-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <h2 className="text-sm font-semibold">Drill records</h2>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {drillRecords.length > 0
-                            ? `${drillRecords.length} record${drillRecords.length !== 1 ? "s" : ""}`
-                            : "No drill records added."}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setDrillDialogOpen(true)}
-                      >
-                        Edit
-                      </Button>
-                    </div>
-
-                    {invalidDrillRecordIds.size > 0 && (
-                      <Alert variant="destructive" className="mt-3 grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 py-2">
-                        <AlertCircle className="mt-0.5 h-4 w-4" />
-                        <AlertTitle className="mb-0 text-sm">Check drill placement</AlertTitle>
-                        <AlertDescription className="col-start-2 text-xs">
-                          One or more holes appear outside the lens outline or have an invalid diameter.
-                        </AlertDescription>
-                      </Alert>
-                    )}
                   </div>
                 )}
 
