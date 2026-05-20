@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
   Cable,
@@ -17,6 +18,7 @@ import {
   Loader2,
   Play,
   PlugZap,
+  PenLine,
   RotateCcw,
   Settings,
   Unplug,
@@ -49,6 +51,11 @@ import {
   type OmaJobInfo,
   parseOmaContent,
 } from "@/lib/oma";
+import {
+  createDesignFromTrace,
+  DESIGN_HANDOFF_KEY,
+  serializeDesign,
+} from "@/lib/lens-design-document";
 import { buildSimulatedNidekTrace } from "@/lib/simulated-trace";
 import {
   formatNumber,
@@ -105,6 +112,7 @@ type DocumentSource =
   | { type: "oma"; label: string };
 
 export function App() {
+  const navigate = useNavigate();
   const serialSupported = WebSerialTransport.isSupported();
   const [theme, setTheme] = useState<ThemeMode>(() => {
     try {
@@ -619,6 +627,23 @@ export function App() {
     return true;
   };
 
+  const openCurrentTraceInDesigner = () => {
+    if (!trace) return;
+    const design = createDesignFromTrace(trace, {
+      fileName:
+        documentSource.type === "oma"
+          ? documentSource.label
+          : documentSource.type === "tracer"
+            ? documentSource.label ?? "Captured trace"
+            : "Captured trace",
+      jobInfo,
+      drillRecords,
+      dblMm: pairDblMm,
+    });
+    sessionStorage.setItem(DESIGN_HANDOFF_KEY, serializeDesign(design));
+    navigate("/designer");
+  };
+
   const saveCalibration = () => {
     const mm = parseFloat(calDraft);
     if (isNaN(mm) || mm <= 0) return;
@@ -703,6 +728,14 @@ export function App() {
               className="hidden"
               onChange={handleOmaFileSelected}
             />
+            <Button
+              variant="outline"
+              onClick={() => navigate("/designer")}
+              disabled={busy}
+            >
+              <PenLine className="h-4 w-4" />
+              Designer
+            </Button>
             {trace && (
               <Button
                 variant="outline"
@@ -889,7 +922,11 @@ export function App() {
         ) : (
           <>
             {workflow === "editor" && (
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={openCurrentTraceInDesigner}>
+                  <PenLine className="h-4 w-4" />
+                  Open in designer
+                </Button>
                 <div className="relative" ref={downloadMenuRef}>
                   <Button
                     variant="outline"
