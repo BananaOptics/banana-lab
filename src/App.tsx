@@ -1,5 +1,6 @@
 import {
   type ChangeEvent,
+  type DragEvent,
   type RefObject,
   useEffect,
   useMemo,
@@ -54,10 +55,13 @@ import {
   mirrorClosedRadiiHorizontally,
   pointIsInsideClosedTrace,
 } from "@/lib/trace-geometry";
+import { cn } from "@/lib/utils";
 import {
   type SerialLogEntry,
   WebSerialTransport,
 } from "@/lib/web-serial-transport";
+import bananaOpticsLogoDarkUrl from "@/assets/banana-optics-logo-dark.svg";
+import bananaOpticsLogoUrl from "@/assets/banana-optics-logo.svg";
 
 interface UiLogEntry {
   id: number;
@@ -97,7 +101,7 @@ type ThemeMode = (typeof THEME_OPTIONS)[number]["value"];
 type WorkflowMode = "capture" | "editor";
 type DocumentSource =
   | { type: "none" }
-  | { type: "tracer"; label: string }
+  | { type: "tracer"; label?: string }
   | { type: "oma"; label: string };
 
 export function App() {
@@ -111,6 +115,10 @@ export function App() {
     } catch {
       return "system";
     }
+  });
+  const [isDarkTheme, setIsDarkTheme] = useState(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    return theme === "dark" || (theme === "system" && media.matches);
   });
   const [tracerModel, setTracerModel] =
     useState<TracerModel>("nidek-lt900-std");
@@ -128,10 +136,12 @@ export function App() {
     type: "none",
   });
   const [omaWarnings, setOmaWarnings] = useState<string[]>([]);
+  const [omaDragActive, setOmaDragActive] = useState(false);
   const [trace, setTrace] = useState<DecodedNidekTrace | null>(null);
   const [showAsPair, setShowAsPair] = useState(false);
   const [pairDblMm, setPairDblMm] = useState(18);
   const [pairDblInput, setPairDblInput] = useState("18");
+  const [pairDblTouched, setPairDblTouched] = useState(false);
   const [zoom, setZoom] = useState<"fit" | "1:1">("fit");
   const [pxPerMm, setPxPerMm] = useState<number | null>(() => {
     try {
@@ -187,26 +197,26 @@ export function App() {
         .map((r) => r.id),
     );
   }, [drillRecords, trace]);
-  const omaFiles = useMemo(
-    () => {
-      if (!trace) return [];
-      return buildOmaFiles(trace, jobInfo, drillRecords, pairDblMm);
-    },
-    [trace, jobInfo, drillRecords, pairDblMm],
-  );
+  const omaFiles = useMemo(() => {
+    if (!trace) return [];
+    return buildOmaFiles(trace, jobInfo, drillRecords, pairDblMm);
+  }, [trace, jobInfo, drillRecords, pairDblMm]);
   const [busy, setBusy] = useState(false);
   const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
   const [downloadPointCount, setDownloadPointCount] = useState<400 | 1000>(400);
+  const [frameDetailsExpanded, setFrameDetailsExpanded] = useState(false);
   const transportRef = useRef<WebSerialTransport | null>(null);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
   const omaFileInputRef = useRef<HTMLInputElement>(null);
+  const omaDragDepthRef = useRef(0);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const applyTheme = () => {
       const useDark = theme === "dark" || (theme === "system" && media.matches);
+      setIsDarkTheme(useDark);
       document.documentElement.classList.toggle("dark", useDark);
       document.documentElement.style.colorScheme = useDark ? "dark" : "light";
     };
@@ -232,6 +242,7 @@ export function App() {
     [omaFiles],
   );
   const selectedOma = downloadPointCount === 400 ? primaryOma : secondaryOma;
+  const logoUrl = isDarkTheme ? bananaOpticsLogoDarkUrl : bananaOpticsLogoUrl;
 
   useEffect(() => {
     const closeTransport = () => {
@@ -271,7 +282,11 @@ export function App() {
   useEffect(() => {
     let typedSequence = "";
     const handler = (event: KeyboardEvent) => {
-      if (event.altKey && event.shiftKey && (event.code === "KeyR" || event.key.toLowerCase() === "r")) {
+      if (
+        event.altKey &&
+        event.shiftKey &&
+        (event.code === "KeyR" || event.key.toLowerCase() === "r")
+      ) {
         event.preventDefault();
         runSimulatedTrace();
         typedSequence = "";
@@ -302,9 +317,11 @@ export function App() {
     const dbl = nextTrace.metadata.dblMm > 0 ? nextTrace.metadata.dblMm : 18;
     setPairDblMm(dbl);
     setPairDblInput(String(dbl));
+    setPairDblTouched(false);
   };
 
   const updateEditableDbl = (value: string) => {
+    setPairDblTouched(true);
     setPairDblInput(value);
     const n = parseFloat(value);
     if (Number.isFinite(n) && n >= 0) setPairDblMm(n);
@@ -433,7 +450,7 @@ export function App() {
       setEditableDblFromTrace(result.trace);
       setTrace(result.trace);
       setShowAsPair(result.trace.metadata.side !== "B");
-      setDocumentSource({ type: "tracer", label: "Captured trace" });
+      setDocumentSource({ type: "tracer" });
       setWorkflow("editor");
     } catch (traceError) {
       const message = messageFromError(traceError);
@@ -473,6 +490,7 @@ export function App() {
   const resetTrace = () => {
     setTrace(null);
     setShowAsPair(false);
+    setPairDblTouched(false);
     setDrillRecords([]);
     setDocumentSource({ type: "none" });
     setOmaWarnings([]);
@@ -487,13 +505,7 @@ export function App() {
     omaFileInputRef.current?.click();
   };
 
-  const handleOmaFileSelected = async (
-    event: ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
-
+  const openOmaFile = async (file: File) => {
     setBusy(true);
     setError(null);
     try {
@@ -518,6 +530,62 @@ export function App() {
     }
   };
 
+  const handleOmaFileSelected = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+
+    await openOmaFile(file);
+  };
+
+  const handleOmaDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (busy) return;
+    omaDragDepthRef.current += 1;
+    setOmaDragActive(true);
+  };
+
+  const handleOmaDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!busy) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  const handleOmaDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    omaDragDepthRef.current = Math.max(0, omaDragDepthRef.current - 1);
+    if (omaDragDepthRef.current === 0) {
+      setOmaDragActive(false);
+    }
+  };
+
+  const handleOmaDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    omaDragDepthRef.current = 0;
+    setOmaDragActive(false);
+
+    if (busy) return;
+
+    const file = event.dataTransfer.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith(".oma")) {
+      const message = "Drop an .oma file to open it.";
+      setError({ title: "Could not open OMA", message });
+      setStatusText(message);
+      return;
+    }
+
+    await openOmaFile(file);
+  };
+
   const handleProtocolEvent = (event: Lt900Event) => {
     setPhase(event.phase);
     setStatusText(event.message);
@@ -529,6 +597,16 @@ export function App() {
   };
 
   const downloadOma = (file: OmaFile) => {
+    if (
+      documentSource.type === "tracer" &&
+      !pairDblTouched &&
+      !window.confirm(
+        "DBL has not been checked or edited since tracing. Download the OMA file anyway?",
+      )
+    ) {
+      return false;
+    }
+
     const blob = new Blob([file.content], { type: "text/plain;charset=utf-8" });
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -538,6 +616,7 @@ export function App() {
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
+    return true;
   };
 
   const saveCalibration = () => {
@@ -545,7 +624,11 @@ export function App() {
     if (isNaN(mm) || mm <= 0) return;
     const px = CAL_REF_PX / mm;
     setPxPerMm(px);
-    try { localStorage.setItem(PXPERMM_KEY, String(px)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(PXPERMM_KEY, String(px));
+    } catch {
+      /* ignore */
+    }
   };
 
   const isActivePhase =
@@ -558,22 +641,30 @@ export function App() {
         <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-normal">
-                Frame Tracer
+              <h1>
+                <img
+                  src={logoUrl}
+                  alt="Banana Optics"
+                  className="h-11 w-auto"
+                />
               </h1>
               {workflow === "capture" ? (
                 <Badge variant={connected ? "success" : "secondary"}>
                   {connected ? "Connected" : "Disconnected"}
                 </Badge>
-              ) : (
-                <Badge variant={documentSource.type === "oma" ? "secondary" : "success"}>
+              ) : documentSource.type !== "tracer" || documentSource.label ? (
+                <Badge
+                  variant={
+                    documentSource.type === "oma" ? "secondary" : "success"
+                  }
+                >
                   {documentSource.type === "oma"
                     ? documentSource.label
                     : documentSource.type === "tracer"
                       ? documentSource.label
                       : "OMA draft"}
                 </Badge>
-              )}
+              ) : null}
             </div>
             {trace && workflow === "capture" && (
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -587,7 +678,9 @@ export function App() {
                   <select
                     id="tracer-model"
                     value={tracerModel}
-                    onChange={(e) => setTracerModel(e.target.value as TracerModel)}
+                    onChange={(e) =>
+                      setTracerModel(e.target.value as TracerModel)
+                    }
                     disabled={connected}
                     className="rounded-md border bg-background px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -611,10 +704,14 @@ export function App() {
               onChange={handleOmaFileSelected}
             />
             {trace && (
-            <Button variant="outline" onClick={openOmaFilePicker} disabled={busy}>
-              <FileUp className="h-4 w-4" />
-              Open OMA
-            </Button>
+              <Button
+                variant="outline"
+                onClick={openOmaFilePicker}
+                disabled={busy}
+              >
+                <FileUp className="h-4 w-4" />
+                Open OMA
+              </Button>
             )}
             {trace && workflow === "capture" && (
               <>
@@ -634,7 +731,11 @@ export function App() {
                         {portInfo}
                       </span>
                     )}
-                    <Button variant="outline" onClick={disconnect} disabled={busy}>
+                    <Button
+                      variant="outline"
+                      onClick={disconnect}
+                      disabled={busy}
+                    >
                       <Unplug className="h-4 w-4" />
                       Disconnect
                     </Button>
@@ -686,10 +787,15 @@ export function App() {
         </header>
 
         {error && !captureDialogOpen ? (
-          <Alert variant="destructive" className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+          <Alert
+            variant="destructive"
+            className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1"
+          >
             <AlertCircle className="mt-0.5 h-4 w-4" />
             <AlertTitle className="mb-0">{error.title}</AlertTitle>
-            <AlertDescription className="col-start-2">{error.message}</AlertDescription>
+            <AlertDescription className="col-start-2">
+              {error.message}
+            </AlertDescription>
           </Alert>
         ) : null}
 
@@ -698,7 +804,8 @@ export function App() {
             <AlertCircle className="mt-0.5 h-4 w-4" />
             <AlertTitle className="mb-0">Tracer capture unavailable</AlertTitle>
             <AlertDescription className="col-start-2">
-              Web Serial requires desktop Chrome or Edge. Opening and editing OMA files is still available.
+              Web Serial requires desktop Chrome or Edge. Opening and editing
+              OMA files is still available.
             </AlertDescription>
           </Alert>
         ) : null}
@@ -716,43 +823,65 @@ export function App() {
         {!trace ? (
           <section className="flex min-h-[420px] items-center justify-center py-8">
             <div className="grid w-full max-w-3xl gap-4 sm:grid-cols-2">
-              <Card>
-                <CardHeader>
+              <Card className="flex h-full flex-col">
+                <CardHeader className="sm:min-h-[96px]">
                   <CardTitle>Trace form</CardTitle>
-                  <CardDescription>
-                    Connect the tracer, choose the model, and read a new trace.
-                  </CardDescription>
+                  <CardDescription>Trace with physical tracer.</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Button
-                    className="w-full"
-                    onClick={() => {
-                      setWorkflow("capture");
-                      setCaptureDialogOpen(true);
-                    }}
-                  >
-                    <Cable className="h-4 w-4" />
-                    Trace form
-                  </Button>
+                <CardContent className="flex flex-1 flex-col">
+                  <div className="flex min-h-[210px] flex-1 flex-col items-center justify-between gap-5 p-5">
+                    <Cable
+                      className="h-[120px] w-[120px] text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <Button
+                      className="w-full"
+                      onClick={() => {
+                        setWorkflow("capture");
+                        setCaptureDialogOpen(true);
+                      }}
+                    >
+                      Trace form
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
-              <Card>
-                <CardHeader>
+              <Card
+                className={cn(
+                  "flex h-full flex-col transition-colors",
+                  busy && "opacity-70",
+                )}
+                onDragEnter={handleOmaDragEnter}
+                onDragLeave={handleOmaDragLeave}
+                onDragOver={handleOmaDragOver}
+                onDrop={handleOmaDrop}
+              >
+                <CardHeader className="sm:min-h-[96px]">
                   <CardTitle>From file</CardTitle>
                   <CardDescription>
-                    Open an existing OMA file and continue editing it.
+                    Open or drop an existing OMA file and continue editing it.
                   </CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={openOmaFilePicker}
-                    disabled={busy}
+                <CardContent className="flex flex-1 flex-col">
+                  <div
+                    className={cn(
+                      "flex min-h-[210px] flex-1 flex-col items-center justify-between gap-5 rounded-md border-2 border-dotted border-muted-foreground/50 bg-muted/20 p-5 transition-colors",
+                      omaDragActive &&
+                        "border-ring bg-accent/60 ring-2 ring-ring ring-offset-2 ring-offset-background",
+                    )}
                   >
-                    <FileUp className="h-4 w-4" />
-                    Open OMA
-                  </Button>
+                    <FileUp
+                      className="h-[120px] w-[120px] text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <Button
+                      className="w-full"
+                      onClick={openOmaFilePicker}
+                      disabled={busy}
+                    >
+                      Open OMA
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -782,15 +911,26 @@ export function App() {
                           >
                             File name
                           </label>
-                          <input
-                            id="oma-job"
-                            value={jobInfo.job}
-                            onChange={(e) =>
-                              setJobInfo((p) => ({ ...p, job: e.target.value }))
-                            }
-                            className="w-full rounded-md border bg-background px-3 py-1.5 font-mono text-xs"
-                            spellCheck={false}
-                          />
+                          <div className="flex overflow-hidden rounded-md border bg-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
+                            <input
+                              id="oma-job"
+                              value={jobInfo.job}
+                              onChange={(e) =>
+                                setJobInfo((p) => ({
+                                  ...p,
+                                  job: e.target.value.replace(
+                                    /(?:_(?:400|1000))?\.oma$/i,
+                                    "",
+                                  ),
+                                }))
+                              }
+                              className="min-w-0 flex-1 bg-transparent px-3 py-1.5 font-mono text-xs outline-none"
+                              spellCheck={false}
+                            />
+                            <span className="flex shrink-0 items-center border-l bg-muted px-3 font-mono text-xs text-muted-foreground">
+                              .oma
+                            </span>
+                          </div>
                         </div>
 
                         <div className="space-y-2">
@@ -825,8 +965,9 @@ export function App() {
                           className="w-full"
                           disabled={!selectedOma}
                           onClick={() => {
-                            selectedOma && downloadOma(selectedOma);
-                            setDownloadMenuOpen(false);
+                            if (selectedOma && downloadOma(selectedOma)) {
+                              setDownloadMenuOpen(false);
+                            }
                           }}
                         >
                           <Download className="h-4 w-4" />
@@ -839,122 +980,126 @@ export function App() {
               </div>
             )}
             <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="flex flex-col gap-6">
-            <Card>
-              <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
-                <CardTitle>{workflow === "capture" ? "Capture preview" : "OMA preview"}</CardTitle>
-                <div className="flex items-center gap-2">
-                  <div className="flex overflow-hidden rounded-md border text-xs font-medium">
-                    <button
-                      className={`px-2.5 py-1 transition-colors ${zoom === "fit" ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
-                      onClick={() => setZoom("fit")}
-                    >
-                      Fit
-                    </button>
-                    <button
-                      className={`border-l px-2.5 py-1 transition-colors ${zoom === "1:1" ? "bg-primary text-primary-foreground" : "hover:bg-accent"} disabled:cursor-not-allowed disabled:opacity-40`}
-                      onClick={() => setZoom("1:1")}
-                      disabled={!pxPerMm}
-                      title={!pxPerMm ? "Calibrate screen scale first" : "True 1:1 physical scale"}
-                    >
-                      1:1
-                    </button>
-                  </div>
-                  {workflow === "editor" && trace && trace.metadata.side !== "B" && (
-                    <>
-                      <Button
-                        variant={showAsPair ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={() => setShowAsPair((v) => !v)}
-                      >
-                        {showAsPair ? "Show original" : "Show as pair"}
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <TracePreview
-                  trace={previewTrace}
-                  drillRecords={drillRecords}
-                  invalidDrillRecordIds={invalidDrillRecordIds}
-                  isLoading={isActivePhase}
-                  zoom={zoom}
-                  pxPerMm={pxPerMm}
-                />
-                {workflow === "editor" && trace && (
-                  <div className="border-t pt-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <h2 className="text-sm font-semibold">Drill records</h2>
-                        <p className="mt-0.5 text-xs text-muted-foreground">
-                          {drillRecords.length > 0
-                            ? `${drillRecords.length} record${drillRecords.length !== 1 ? "s" : ""}`
-                            : "No drill records added."}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setDrillDialogOpen(true)}
-                      >
-                        Edit
-                      </Button>
-                    </div>
-
-                    {invalidDrillRecordIds.size > 0 && (
-                      <Alert variant="destructive" className="mt-3 grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 py-2">
-                        <AlertCircle className="mt-0.5 h-4 w-4" />
-                        <AlertTitle className="mb-0 text-sm">Check drill placement</AlertTitle>
-                        <AlertDescription className="col-start-2 text-xs">
-                          One or more holes appear outside the lens outline or have an invalid diameter.
-                        </AlertDescription>
-                      </Alert>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="space-y-6">
-            {workflow === "editor" && (
-              <>
+              <div className="flex flex-col gap-6">
                 <Card>
-                  <CardHeader>
-                    <CardTitle>Frame details</CardTitle>
-                    <CardDescription>
-                      Frame measurements and metadata written into the OMA file.
-                    </CardDescription>
+                  <CardHeader className="flex-row items-center justify-between gap-4 space-y-0">
+                    <CardTitle>Preview</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <div className="flex overflow-hidden rounded-md border text-xs font-medium">
+                        <button
+                          className={`px-2.5 py-1 transition-colors ${zoom === "fit" ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`}
+                          onClick={() => setZoom("fit")}
+                        >
+                          Fit
+                        </button>
+                        <button
+                          className={`border-l px-2.5 py-1 transition-colors ${zoom === "1:1" ? "bg-primary text-primary-foreground" : "hover:bg-accent"} disabled:cursor-not-allowed disabled:opacity-40`}
+                          onClick={() => setZoom("1:1")}
+                          disabled={!pxPerMm}
+                          title={
+                            !pxPerMm
+                              ? "Calibrate screen scale first"
+                              : "True 1:1 physical scale"
+                          }
+                        >
+                          1:1
+                        </button>
+                      </div>
+                      {workflow === "editor" &&
+                        trace &&
+                        trace.metadata.side !== "B" && (
+                          <>
+                            <Button
+                              variant={showAsPair ? "secondary" : "outline"}
+                              size="sm"
+                              onClick={() => setShowAsPair((v) => !v)}
+                            >
+                              {showAsPair ? "Show original" : "Show as pair"}
+                            </Button>
+                          </>
+                        )}
+                    </div>
                   </CardHeader>
-                  <CardContent>
-                    <div className="grid gap-4">
-                      {trace && (
-                        <>
-                          <FrameReadout
-                            label="Captured side"
-                            field="Side"
-                            value={{ R: "Right lens", L: "Left lens", B: "Both lenses" }[trace.metadata.side] ?? trace.metadata.side}
-                          />
-                          <FrameReadout
-                            label="Lens width"
-                            field="HBOX"
-                            value={`${formatNumber(trace.stats.hboxMm, 2)} mm`}
-                          />
-                          <FrameReadout
-                            label="Lens height"
-                            field="VBOX"
-                            value={`${formatNumber(trace.stats.vboxMm, 2)} mm`}
-                          />
+                  <CardContent className="space-y-4">
+                    <TracePreview
+                      trace={previewTrace}
+                      drillRecords={drillRecords}
+                      invalidDrillRecordIds={invalidDrillRecordIds}
+                      isLoading={isActivePhase}
+                      zoom={zoom}
+                      pxPerMm={pxPerMm}
+                    />
+                    {workflow === "editor" && trace && (
+                      <div className="border-t pt-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <h2 className="text-sm font-semibold">
+                              Drill records
+                            </h2>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {drillRecords.length > 0
+                                ? `${drillRecords.length} record${drillRecords.length !== 1 ? "s" : ""}`
+                                : "No drill records added."}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setDrillDialogOpen(true)}
+                          >
+                            Edit
+                          </Button>
+                        </div>
+
+                        {invalidDrillRecordIds.size > 0 && (
+                          <Alert
+                            variant="destructive"
+                            className="mt-3 grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 py-2"
+                          >
+                            <AlertCircle className="mt-0.5 h-4 w-4" />
+                            <AlertTitle className="mb-0 text-sm">
+                              Check drill placement
+                            </AlertTitle>
+                            <AlertDescription className="col-start-2 text-xs">
+                              One or more holes appear outside the lens outline
+                              or have an invalid diameter.
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="space-y-6">
+                {workflow === "editor" && (
+                  <>
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Details</CardTitle>
+                        <CardDescription>
+                          Frame measurements and metadata written into the OMA
+                          file.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid gap-4">
                           <div className="space-y-1.5">
-                            <FieldLabel htmlFor="frame-dbl" label="Bridge distance" field="DBL" />
+                            <FieldLabel
+                              htmlFor="frame-dbl"
+                              label="Bridge distance"
+                              field="DBL"
+                            />
                             <div className="relative">
                               <input
                                 id="frame-dbl"
                                 type="text"
                                 inputMode="decimal"
                                 value={pairDblInput}
-                                onChange={(e) => updateEditableDbl(e.target.value)}
+                                onChange={(e) =>
+                                  updateEditableDbl(e.target.value)
+                                }
                                 className="w-full rounded-md border bg-background px-3 py-1.5 pr-10 text-sm"
                               />
                               <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
@@ -962,76 +1107,151 @@ export function App() {
                               </span>
                             </div>
                           </div>
-                          <FrameReadout
-                            label="Circumference"
-                            field="CIRC"
-                            value={`${formatNumber(trace.stats.circMm, 2)} mm`}
-                          />
-                          <FrameReadout
-                            label="Base curve"
-                            field="FCRV"
-                            value={formatNumber(trace.metadata.fcrv, 1)}
-                          />
-                        </>
-                      )}
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="oma-ven" label="Frame brand" field="VEN" />
-                        <input
-                          id="oma-ven"
-                          value={jobInfo.ven}
-                          onChange={(e) =>
-                            setJobInfo((p) => ({ ...p, ven: e.target.value }))
-                          }
-                          placeholder="e.g. Ray-Ban"
-                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="oma-model" label="Frame model" field="MODEL" />
-                        <input
-                          id="oma-model"
-                          value={jobInfo.model}
-                          onChange={(e) =>
-                            setJobInfo((p) => ({ ...p, model: e.target.value }))
-                          }
-                          placeholder="e.g. RB5154 Clubmaster"
-                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="oma-wrapang" label="Wrap angle (deg)" field="WRAPANG" />
-                        <input
-                          id="oma-wrapang"
-                          type="number"
-                          step="0.1"
-                          value={jobInfo.wrapang}
-                          onChange={(e) =>
-                            setJobInfo((p) => ({ ...p, wrapang: e.target.value }))
-                          }
-                          placeholder="e.g. 5.0"
-                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <FieldLabel htmlFor="oma-panto" label="Pantoscopic tilt (deg)" field="PANTO" />
-                        <input
-                          id="oma-panto"
-                          type="number"
-                          step="0.1"
-                          value={jobInfo.panto}
-                          onChange={(e) =>
-                            setJobInfo((p) => ({ ...p, panto: e.target.value }))
-                          }
-                          placeholder="e.g. 8.0"
-                          className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                        />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </>
-            )}
-          </div>
+                          <div className="space-y-1.5">
+                            <FieldLabel
+                              htmlFor="oma-ven"
+                              label="Frame brand"
+                              field="VEN"
+                            />
+                            <input
+                              id="oma-ven"
+                              value={jobInfo.ven}
+                              onChange={(e) =>
+                                setJobInfo((p) => ({
+                                  ...p,
+                                  ven: e.target.value,
+                                }))
+                              }
+                              placeholder="e.g. Ray-Ban"
+                              className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <FieldLabel
+                              htmlFor="oma-model"
+                              label="Frame model"
+                              field="MODEL"
+                            />
+                            <input
+                              id="oma-model"
+                              value={jobInfo.model}
+                              onChange={(e) =>
+                                setJobInfo((p) => ({
+                                  ...p,
+                                  model: e.target.value,
+                                }))
+                              }
+                              placeholder="e.g. RB5154 Clubmaster"
+                              className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                            />
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="w-fit px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                            onClick={() =>
+                              setFrameDetailsExpanded((expanded) => !expanded)
+                            }
+                            aria-expanded={frameDetailsExpanded}
+                            aria-controls="frame-details-extra"
+                          >
+                            <ChevronDown
+                              className={`h-4 w-4 transition-transform ${frameDetailsExpanded ? "rotate-180" : ""}`}
+                            />
+                            {frameDetailsExpanded ? "Show less" : "Show more"}
+                          </Button>
+                          {frameDetailsExpanded && (
+                            <div
+                              id="frame-details-extra"
+                              className="grid gap-4"
+                            >
+                              {trace && (
+                                <>
+                                  <FrameReadout
+                                    label="Captured side"
+                                    field="Side"
+                                    value={
+                                      {
+                                        R: "Right lens",
+                                        L: "Left lens",
+                                        B: "Both lenses",
+                                      }[trace.metadata.side] ??
+                                      trace.metadata.side
+                                    }
+                                  />
+                                  <FrameReadout
+                                    label="Lens width"
+                                    field="HBOX"
+                                    value={`${formatNumber(trace.stats.hboxMm, 2)} mm`}
+                                  />
+                                  <FrameReadout
+                                    label="Lens height"
+                                    field="VBOX"
+                                    value={`${formatNumber(trace.stats.vboxMm, 2)} mm`}
+                                  />
+                                  <FrameReadout
+                                    label="Circumference"
+                                    field="CIRC"
+                                    value={`${formatNumber(trace.stats.circMm, 2)} mm`}
+                                  />
+                                  <FrameReadout
+                                    label="Base curve"
+                                    field="FCRV"
+                                    value={formatNumber(trace.metadata.fcrv, 1)}
+                                  />
+                                </>
+                              )}
+                              <div className="space-y-1.5">
+                                <FieldLabel
+                                  htmlFor="oma-wrapang"
+                                  label="Wrap angle (deg)"
+                                  field="WRAPANG"
+                                />
+                                <input
+                                  id="oma-wrapang"
+                                  type="number"
+                                  step="0.1"
+                                  value={jobInfo.wrapang}
+                                  onChange={(e) =>
+                                    setJobInfo((p) => ({
+                                      ...p,
+                                      wrapang: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="e.g. 5.0"
+                                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <FieldLabel
+                                  htmlFor="oma-panto"
+                                  label="Pantoscopic tilt (deg)"
+                                  field="PANTO"
+                                />
+                                <input
+                                  id="oma-panto"
+                                  type="number"
+                                  step="0.1"
+                                  value={jobInfo.panto}
+                                  onChange={(e) =>
+                                    setJobInfo((p) => ({
+                                      ...p,
+                                      panto: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="e.g. 8.0"
+                                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </>
+                )}
+              </div>
             </section>
           </>
         )}
@@ -1125,7 +1345,8 @@ function CaptureDialog({
   onClearLogs: () => void;
   onClose: () => void;
 }) {
-  const isActive = phase !== "idle" && phase !== "complete" && phase !== "error";
+  const isActive =
+    phase !== "idle" && phase !== "complete" && phase !== "error";
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1162,7 +1383,10 @@ function CaptureDialog({
         </div>
         <div className="space-y-5 px-5 py-5">
           {error && (
-            <Alert variant="destructive" className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+            <Alert
+              variant="destructive"
+              className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1"
+            >
               <AlertCircle className="mt-0.5 h-4 w-4" />
               <AlertTitle className="mb-0">{error.title}</AlertTitle>
               <AlertDescription className="col-start-2">
@@ -1174,7 +1398,9 @@ function CaptureDialog({
           {!serialSupported && (
             <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
               <AlertCircle className="mt-0.5 h-4 w-4" />
-              <AlertTitle className="mb-0">Tracer capture unavailable</AlertTitle>
+              <AlertTitle className="mb-0">
+                Tracer capture unavailable
+              </AlertTitle>
               <AlertDescription className="col-start-2">
                 Web Serial requires desktop Chrome or Edge.
               </AlertDescription>
@@ -1188,21 +1414,27 @@ function CaptureDialog({
             >
               Tracer model
             </label>
-            <select
-              id="dialog-tracer-model"
-              value={tracerModel}
-              onChange={(e) =>
-                onTracerModelChange(e.target.value as TracerModel)
-              }
-              disabled={connected}
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {TRACER_MODELS.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                id="dialog-tracer-model"
+                value={tracerModel}
+                onChange={(e) =>
+                  onTracerModelChange(e.target.value as TracerModel)
+                }
+                disabled={connected}
+                className="h-9 w-full appearance-none rounded-md border bg-background px-3 pr-9 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {TRACER_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+            </div>
           </div>
 
           <div className="rounded-md border bg-muted/30 p-3">
@@ -1411,29 +1643,36 @@ function SettingsDialog({
                 <label htmlFor="cal-mm" className="text-sm font-medium">
                   Line length (mm)
                 </label>
-                <input
-                  id="cal-mm"
-                  type="number"
-                  step="0.01"
-                  min="0.1"
-                  value={calDraft}
-                  onChange={(e) => onCalDraftChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onSaveCalibration();
-                  }}
-                  placeholder="e.g. 53"
-                  className="w-full rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
-                />
+                <div className="flex gap-2">
+                  <input
+                    id="cal-mm"
+                    type="number"
+                    step="0.01"
+                    min="0.1"
+                    value={calDraft}
+                    onChange={(e) => onCalDraftChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onSaveCalibration();
+                    }}
+                    placeholder="e.g. 53"
+                    className="min-w-0 flex-1 rounded-md border bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground"
+                  />
+                  <Button
+                    onClick={onSaveCalibration}
+                    disabled={!calDraft || parseFloat(calDraft) <= 0}
+                    className="shrink-0"
+                  >
+                    Save
+                  </Button>
+                </div>
               </div>
-              <Button
-                onClick={onSaveCalibration}
-                disabled={!calDraft || parseFloat(calDraft) <= 0}
-                className="w-full"
-              >
-                Save
-              </Button>
             </div>
           </div>
+        </div>
+        <div className="flex justify-end border-t px-5 py-4">
+          <Button type="button" onClick={onClose}>
+            Close
+          </Button>
         </div>
       </div>
     </div>
@@ -1484,28 +1723,50 @@ function messageFromError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-
 function formatByteHead(bytes: Uint8Array, count: number) {
   return Array.from(bytes.slice(0, count))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join(" ");
 }
 
-function FieldLabel({ htmlFor, label, field }: { htmlFor: string; label: string; field: string }) {
+function FieldLabel({
+  htmlFor,
+  label,
+  field,
+}: {
+  htmlFor: string;
+  label: string;
+  field: string;
+}) {
   return (
-    <label htmlFor={htmlFor} className="flex items-baseline justify-between gap-2 text-sm font-medium">
+    <label
+      htmlFor={htmlFor}
+      className="flex items-baseline justify-between gap-2 text-sm font-medium"
+    >
       <span>{label}</span>
-      <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</span>
+      <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">
+        {field}
+      </span>
     </label>
   );
 }
 
-function FrameReadout({ label, field, value }: { label: string; field: string; value: string }) {
+function FrameReadout({
+  label,
+  field,
+  value,
+}: {
+  label: string;
+  field: string;
+  value: string;
+}) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-2 text-sm font-medium">
         <span>{label}</span>
-        <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">{field}</span>
+        <span className="text-[10px] font-medium uppercase tracking-normal text-muted-foreground">
+          {field}
+        </span>
       </div>
       <div className="rounded-md border bg-muted/30 px-3 py-1.5 text-sm font-medium text-muted-foreground">
         {value}

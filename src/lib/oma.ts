@@ -142,12 +142,12 @@ export function buildOmaFiles(
 ): OmaFile[] {
   return [
     {
-      fileName: `${jobInfo.job}_400.oma`,
+      fileName: `${jobInfo.job}.oma`,
       content: buildOmaContent(trace, 400, jobInfo, drillRecords, dblOverrideMm),
       pointCount: 400,
     },
     {
-      fileName: `${jobInfo.job}_1000.oma`,
+      fileName: `${jobInfo.job}.oma`,
       content: buildOmaContent(trace, 1000, jobInfo, drillRecords, dblOverrideMm),
       pointCount: 1000,
     },
@@ -285,7 +285,7 @@ function parseDrillRecord(value: string, index: number): DrillRecord | null {
 }
 
 function stripOmaExtension(fileName: string) {
-  return fileName.replace(/\.[^.]+$/, "");
+  return fileName.replace(/\.[^.]+$/, "").replace(/_(?:400|1000)$/i, "");
 }
 
 function radiiAreMirrored(right: number[], left: number[]) {

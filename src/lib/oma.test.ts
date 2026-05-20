@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DecodedNidekTrace, NidekSide } from "@/lib/nidek-native";
-import { buildOmaContent, parseOmaContent, type OmaJobInfo } from "@/lib/oma";
+import { buildOmaContent, buildOmaFiles, parseOmaContent, type OmaJobInfo } from "@/lib/oma";
 import { mirrorClosedRadiiHorizontally, summarizeRadii } from "@/lib/trace-geometry";
 
 const asymmetricRadii = [3000, 2200, 2600, 2100, 1800, 2400, 2700, 2300];
@@ -59,6 +59,17 @@ describe("buildOmaContent", () => {
   });
 });
 
+describe("buildOmaFiles", () => {
+  it("does not include point-count suffixes in generated filenames", () => {
+    const files = buildOmaFiles(fakeTrace("R"), jobInfo);
+
+    expect(files).toMatchObject([
+      { fileName: "regression.oma", pointCount: 400 },
+      { fileName: "regression.oma", pointCount: 1000 },
+    ]);
+  });
+});
+
 describe("parseOmaContent", () => {
   it("loads OMA metadata, radii, and drill records into an editable trace document", () => {
     const radii = Array.from({ length: 400 }, (_, index) => 2200 + (index % 17));
@@ -100,6 +111,16 @@ describe("parseOmaContent", () => {
       diameter: 1.8,
     });
     expect(parsed.warnings).toEqual([]);
+  });
+
+  it("strips legacy point-count suffixes when deriving a job from filename", () => {
+    const radii = Array.from({ length: 32 }, () => 2200).join(";");
+    const parsed = parseOmaContent(
+      `REQ=TRC\r\nTRCFMT=1;400;E;R;B\r\nR=${radii}\r\n`,
+      "loaded_1000.oma",
+    );
+
+    expect(parsed.jobInfo.job).toBe("loaded");
   });
 });
 
