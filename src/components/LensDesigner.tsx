@@ -8,24 +8,35 @@ import {
 } from "react";
 import { Link } from "react-router-dom";
 import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Circle,
+  Clock,
   Download,
   Eye,
   EyeOff,
   FileJson,
+  FileText,
   FileUp,
-  HelpCircle,
+  Glasses,
+  Grid2X2,
+  Hand,
+  Info,
   Keyboard,
   Lock,
+  Minus,
   Move,
   PenLine,
+  Plus,
   RotateCcw,
-  Save,
+  RotateCw,
+  ScanLine,
+  Spline,
   Unlock,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FRAME_TEMPLATES } from "@/lib/frame-templates";
 import {
   createBlankDesign,
@@ -38,7 +49,6 @@ import {
 } from "@/lib/lens-design-document";
 import {
   clonePath,
-  flattenPath,
   makeId,
   pathBounds,
   pathToSvg,
@@ -51,8 +61,45 @@ import type { LensAnchor, LensDesignDocument, LensPoint } from "@/lib/lens-desig
 import type { DecodedNidekTrace } from "@/lib/nidek-native";
 import { parseOmaContent } from "@/lib/oma";
 import { formatNumber, polarRadiiToPoints } from "@/lib/trace-geometry";
-import { cn } from "@/lib/utils";
 
+// ── Design tokens (dark-only, matching Claude Design) ─────────────────────────
+const DT = {
+  bg: "#09090b",
+  bgPanel: "#0c0c0e",
+  card: "#101013",
+  cardHover: "#15151a",
+  border: "#1f1f23",
+  borderStrong: "#2a2a30",
+  fg: "#fafafa",
+  muted: "#a1a1aa",
+  mutedFg: "#71717a",
+  subtle: "#52525b",
+  accent: "#facc15",
+  accentDim: "rgba(250,204,21,0.12)",
+  canvasBg: "#08090b",
+  gridLine: "rgba(255,255,255,0.045)",
+  gridStrong: "rgba(255,255,255,0.085)",
+  traceFill: "rgba(125,211,178,0.18)",
+  traceStroke: "#7BD4B0",
+  traceStrokeDim: "rgba(125,211,178,0.35)",
+  annotation: "#5b8def",
+  annotationDim: "rgba(91,141,239,0.55)",
+  annotationLabel: "#9bb8f3",
+  drillFill: "rgba(250,204,21,0.4)",
+  drillStroke: "#facc15",
+  safety: "rgba(250,204,21,0.45)",
+  warnColor: "#f59e0b",
+  warnBg: "rgba(245,158,11,0.10)",
+  danger: "#ef4444",
+  dangerBg: "rgba(239,68,68,0.10)",
+  success: "#22c55e",
+  selected: "#60a5fa",
+  selectedFill: "rgba(96,165,250,0.35)",
+  font: '"Inter", system-ui, sans-serif',
+  mono: '"JetBrains Mono", ui-monospace, monospace',
+};
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 type Tool = "select" | "direct";
 type LayerKey = keyof LensDesignDocument["layers"];
 type DragState =
@@ -65,6 +112,7 @@ const CANVAS_W = 980;
 const CANVAS_H = 620;
 const MM_TO_SVG = 1;
 
+// ── Main component ─────────────────────────────────────────────────────────────
 export function LensDesigner() {
   const [doc, setDoc] = useState<LensDesignDocument | null>(() => readHandoff());
   const [tool, setTool] = useState<Tool>("select");
@@ -80,6 +128,9 @@ export function LensDesigner() {
   const projectInputRef = useRef<HTMLInputElement>(null);
   const omaInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const docRef = useRef(doc);
+  useEffect(() => { docRef.current = doc; }, [doc]);
 
   const exportData = useMemo(() => (doc ? buildDesignerOma(doc, previewPointCount) : null), [doc, previewPointCount]);
   const bounds = useMemo(() => (doc ? pathBounds(doc.rightPath) : null), [doc]);
@@ -108,16 +159,8 @@ export function LensDesigner() {
         redo();
         return;
       }
-      if (event.key.toLowerCase() === "v") {
-        event.preventDefault();
-        setTool("select");
-        return;
-      }
-      if (event.key.toLowerCase() === "a") {
-        event.preventDefault();
-        setTool("direct");
-        return;
-      }
+      if (event.key.toLowerCase() === "v") { event.preventDefault(); setTool("select"); return; }
+      if (event.key.toLowerCase() === "a") { event.preventDefault(); setTool("direct"); return; }
       if ((event.key === "Delete" || event.key === "Backspace") && doc) {
         event.preventDefault();
         deleteSelectedAnchors();
@@ -126,6 +169,29 @@ export function LensDesigner() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   });
+
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const handler = (event: WheelEvent) => {
+      event.preventDefault();
+      const current = docRef.current;
+      if (!current) return;
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const newZoom = clamp(current.viewport.zoom * factor, 0.5, 20);
+      const view = getView(current);
+      const rect = el.getBoundingClientRect();
+      const sx = ((event.clientX - rect.left) / rect.width) * CANVAS_W;
+      const sy = ((event.clientY - rect.top) / rect.height) * CANVAS_H;
+      const wx = (sx - view.cx) / view.zoom;
+      const wy = -(sy - view.cy) / view.zoom;
+      const xMm = (sx - wx * newZoom - CANVAS_W / 2) / newZoom;
+      const yMm = (CANVAS_H / 2 - sy - wy * newZoom) / newZoom;
+      setDoc((d) => d ? { ...d, viewport: { zoom: newZoom, xMm, yMm } } : d);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [!!doc]);
 
   const commit = (updater: (current: LensDesignDocument) => LensDesignDocument, markDirty = true) => {
     setDoc((current) => {
@@ -195,53 +261,246 @@ export function LensDesigner() {
     }
   };
 
+  const hiddenInputs = (
+    <>
+      <input ref={projectInputRef} type="file" accept=".lensdesign,application/json" style={{ display: "none" }} onChange={(e) => pickFile(e, openProject)} />
+      <input ref={omaInputRef} type="file" accept=".oma,.OMA,text/plain" style={{ display: "none" }} onChange={(e) => pickFile(e, openOma)} />
+    </>
+  );
+
+  // ── Start screen ──────────────────────────────────────────────────────────────
   if (!doc) {
     return (
-      <main className="min-h-screen bg-background px-4 py-6 sm:px-6 lg:px-8">
-        <DesignerHeader dirty={dirty} />
-        <section className="mx-auto mt-8 grid max-w-5xl gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StartCard title="Generic rimless" description="Standards-sample holes, hardware markers, and starter lens." onClick={() => startNew(createDesignFromTemplate(FRAME_TEMPLATES[0]))} />
-          <StartCard title="Import OMA" description="Create a new design from existing trace and drill records." onClick={() => omaInputRef.current?.click()} />
-          <StartCard title="Open design" description="Load a saved .lensdesign project file." onClick={() => projectInputRef.current?.click()} />
-          <StartCard title="Starter shape" description="Begin with a panto lens and no frame template." onClick={() => startNew(createBlankDesign("panto"))} />
-        </section>
-        <HiddenInputs projectInputRef={projectInputRef} omaInputRef={omaInputRef} onProject={openProject} onOma={openOma} />
-        {error && <StartError message={error} />}
-      </main>
+      <DesignerRoot>
+        <DesignerAppHeader />
+        {hiddenInputs}
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 24px" }}>
+          <div style={{ width: "100%", maxWidth: 920 }}>
+            <div style={{ marginBottom: 28 }}>
+              <DsBadge tone="accent">
+                <Glasses size={11} style={{ marginRight: 4 }} />
+                Frameless lens designer
+              </DsBadge>
+              <h1 style={{ margin: "12px 0 6px", fontSize: 26, fontWeight: 600, letterSpacing: -0.6, color: DT.fg, fontFamily: DT.font }}>
+                Design a new lens
+              </h1>
+              <p style={{ margin: 0, fontSize: 13.5, color: DT.muted, lineHeight: 1.55, maxWidth: 560, fontFamily: DT.font }}>
+                Choose a starting point. You can edit the lens outline with vector handles,
+                keep drill safety margins visible, and export a lab-ready OMA when finished.
+              </p>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 24 }}>
+              <DsStartCard
+                recommended
+                title="Generic rimless template"
+                desc="4-hole standards-sample geometry. Hardware locked, lens shape editable."
+                meta={["DBL 18.0 mm", "4 drill holes", "Soft-rect starter"]}
+                icon={
+                  <svg viewBox="-30 -22 60 44" width="58" height="42">
+                    <path d="M -22 -10 C -22 -16 -16 -18 -8 -18 C 4 -18 12 -16 18 -10 C 22 -4 22 4 18 10 C 12 16 4 18 -8 18 C -16 18 -22 16 -22 10 Z"
+                      fill={DT.traceFill} stroke={DT.traceStroke} strokeWidth={0.7} />
+                    {([[-15, -6], [-15, 6], [15, -6], [15, 6]] as [number, number][]).map(([x, y], i) => (
+                      <circle key={i} cx={x} cy={y} r={1} fill={DT.drillStroke} />
+                    ))}
+                  </svg>
+                }
+                onClick={() => startNew(createDesignFromTemplate(FRAME_TEMPLATES[0]))}
+              />
+              <DsStartCard
+                title="Open OMA trace"
+                desc="Convert a tracer file into editable Bezier anchors. Drill records preserved."
+                meta={["Auto-simplify", "Reference layer kept"]}
+                icon={<FileUp size={26} />}
+                footer={<span style={{ fontSize: 11, color: DT.subtle }}>Accepts .oma files</span>}
+                onClick={() => omaInputRef.current?.click()}
+              />
+              <DsStartCard
+                title="Open project"
+                desc="Resume an existing .lensdesign project with all layers, drill features, and viewport."
+                meta={["Layers preserved", "Undo history fresh"]}
+                icon={<FileText size={26} />}
+                footer={<span style={{ fontSize: 11, color: DT.subtle }}>Accepts .lensdesign files</span>}
+                onClick={() => projectInputRef.current?.click()}
+              />
+              <DsStartCard
+                title="Blank starter shape"
+                desc="Begin from a basic outline without a frame template. Add drill holes later."
+                icon={<Plus size={26} />}
+                shapes={[
+                  { name: "Panto", onClick: () => startNew(createBlankDesign("panto")) },
+                  { name: "Soft rect", onClick: () => startNew(createBlankDesign("panto")) },
+                ]}
+              />
+            </div>
+
+            <div style={{ height: 1, background: DT.border }} />
+            <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: DT.mutedFg, fontFamily: DT.font }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <Info size={13} />
+                <span>Already captured a trace?</span>
+                <Link to="/" style={{ color: DT.fg, textDecoration: "underline", textUnderlineOffset: 2 }}>Open in designer</Link>
+                <span>from the Tracer page.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        {error && (
+          <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", maxWidth: 480, background: DT.dangerBg, border: `1px solid ${DT.danger}`, borderRadius: 8, padding: "10px 16px", fontSize: 12.5, color: DT.danger, fontFamily: DT.font }}>
+            {error}
+          </div>
+        )}
+      </DesignerRoot>
     );
   }
 
-  const selectedAnchorObjects = doc.rightPath.anchors.filter((anchor) => selectedAnchors.includes(anchor.id));
+  // ── Editor ────────────────────────────────────────────────────────────────────
+  const selectedAnchorObjects = doc.rightPath.anchors.filter((a) => selectedAnchors.includes(a.id));
   const svg = getView(doc);
 
   return (
-    <main className="min-h-screen bg-background">
-      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-        <DesignerHeader dirty={dirty}>
-          <Button variant="outline" onClick={() => projectInputRef.current?.click()}><FileUp className="h-4 w-4" /> Open</Button>
-          <Button variant="outline" onClick={saveProject}><Save className="h-4 w-4" /> Save</Button>
-          <Button variant="outline" onClick={() => omaInputRef.current?.click()}><FileUp className="h-4 w-4" /> Import OMA</Button>
-        </DesignerHeader>
-        <HiddenInputs projectInputRef={projectInputRef} omaInputRef={omaInputRef} onProject={openProject} onOma={openOma} />
-        {error && (
-          <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3">
-            <FileJson className="mt-0.5 h-4 w-4" />
-            <AlertTitle className="mb-0">Import note</AlertTitle>
-            <AlertDescription className="col-start-2">{error}</AlertDescription>
-          </Alert>
-        )}
+    <DesignerRoot>
+      <DesignerAppHeader
+        filename={doc.name || doc.jobInfo.job || "untitled.lensdesign"}
+        dirty={dirty}
+        rightExtra={
+          <>
+            <DsIconBtn icon={<RotateCcw size={14} />} title="Undo (⌘Z)" onClick={undo} disabled={history.length === 0} />
+            <DsIconBtn icon={<RotateCw size={14} />} title="Redo (⌘⇧Z)" onClick={redo} disabled={future.length === 0} />
+            <div style={{ width: 1, alignSelf: "stretch", background: DT.border, margin: "0 4px" }} />
+            <DsIconBtn icon={<Keyboard size={14} />} title="Shortcuts" onClick={() => setHelpOpen((v) => !v)} />
+            <DsBtn variant="secondary" onClick={() => projectInputRef.current?.click()} leftIcon={<FileUp size={13} />}>Open</DsBtn>
+            <DsBtn variant="secondary" onClick={saveProject} leftIcon={<FileJson size={13} />}>Save</DsBtn>
+            <DsBtn variant="secondary" onClick={() => omaInputRef.current?.click()} leftIcon={<FileUp size={13} />}>Import OMA</DsBtn>
+            {exportData && (
+              <DsBtn variant="accent" onClick={() => exportData.files[0] && downloadTextFile(exportData.files[0].fileName, exportData.files[0].content, "text/plain;charset=utf-8")} leftIcon={<Download size={13} />}>
+                Export OMA
+              </DsBtn>
+            )}
+          </>
+        }
+      />
+      {hiddenInputs}
 
-        <section className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)_360px]">
-          <Card>
-            <CardHeader>
-              <CardTitle>Layers</CardTitle>
-              <CardDescription>Visibility, locks, and layer settings.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
+      {error && (
+        <div style={{ margin: "0 10px", background: DT.warnBg, border: `1px solid ${DT.warnColor}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: DT.warnColor, fontFamily: DT.font, display: "flex", gap: 8, alignItems: "center" }}>
+          <FileJson size={13} />
+          {error}
+        </div>
+      )}
+
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "56px minmax(0,1fr) 320px", gap: 10, padding: "0 10px 10px", minHeight: 0, overflow: "hidden" }}>
+        {/* Vertical toolbar */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center", background: DT.card, border: `1px solid ${DT.border}`, borderRadius: 10, padding: 6 }}>
+          <ToolBtn active={tool === "select"} onClick={() => setTool("select")} title="Selection (V)" sc="V"><Move size={15} /></ToolBtn>
+          <ToolBtn active={tool === "direct"} onClick={() => setTool("direct")} title="Direct selection (A)" sc="A"><PenLine size={15} /></ToolBtn>
+          <div style={{ height: 1, width: "100%", background: DT.border, margin: "2px 0" }} />
+          <ToolBtn title="Add anchor (+)" sc="+"><Plus size={15} /></ToolBtn>
+          <ToolBtn title="Remove anchor (-)" sc="-"><Minus size={15} /></ToolBtn>
+          <ToolBtn title="Smooth (S)" sc="S"><Spline size={15} /></ToolBtn>
+          <ToolBtn title="Hand (H)" sc="H"><Hand size={15} /></ToolBtn>
+        </div>
+
+        {/* Canvas */}
+        <div style={{ position: "relative", display: "flex", flexDirection: "column", background: DT.card, border: `1px solid ${DT.border}`, borderRadius: 10, overflow: "hidden", minHeight: 0 }}>
+          {helpOpen && <ShortcutPopoverD onClose={() => setHelpOpen(false)} />}
+          <div style={{ flex: 1, overflow: "hidden", background: DT.canvasBg, borderRadius: 9 }}>
+            <svg
+              ref={svgRef}
+              viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
+              style={{ width: "100%", height: "100%", minHeight: 520, display: "block", touchAction: "none" }}
+              onPointerMove={(event) => handlePointerMove(event, svg)}
+              onPointerUp={(event) => handlePointerUp(event.currentTarget)}
+              onPointerLeave={(event) => handlePointerUp(event.currentTarget)}
+              onDoubleClick={(event) => insertAnchorAtEvent(event, svg)}
+              role="application"
+              aria-label="Lens designer canvas"
+            >
+              <defs>
+                <pattern id="ds-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke={DT.gridLine} strokeWidth="0.7" />
+                </pattern>
+              </defs>
+              <rect width={CANVAS_W} height={CANVAS_H} fill="url(#ds-grid)" />
+              <g transform={svg.transform}>
+                {doc.layers.face.visible && <FaceLayer doc={doc} />}
+                {doc.layers.blanks.visible && <BlankLayer doc={doc} />}
+                {doc.layers.template.visible && <TemplateLayer doc={doc} />}
+                {doc.layers.reference.visible && <ReferenceLayer doc={doc} />}
+                {doc.layers.lens.visible && (
+                  <LensLayer
+                    doc={doc}
+                    tool={tool}
+                    selectedAnchors={selectedAnchors}
+                    selectedHandle={selectedHandle}
+                    onPathDown={(event) => {
+                      if (tool !== "select" || doc.layers.lens.locked) return;
+                      dragRef.current = { kind: "path", start: svgPoint(event, svg), original: doc };
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    }}
+                    onAnchorDown={(event, anchorId) => {
+                      if (doc.layers.lens.locked) return;
+                      event.stopPropagation();
+                      setTool("direct");
+                      setSelectedHandle(null);
+                      setSelectedAnchors((current) => event.shiftKey ? toggleInArray(current, anchorId) : [anchorId]);
+                      dragRef.current = { kind: "anchor", anchorId, start: svgPoint(event, svg), original: doc };
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    }}
+                    onHandleDown={(event, anchorId, handle) => {
+                      if (doc.layers.lens.locked) return;
+                      event.stopPropagation();
+                      setTool("direct");
+                      setSelectedAnchors([anchorId]);
+                      setSelectedHandle({ anchorId, handle });
+                      dragRef.current = { kind: "handle", anchorId, handle, start: svgPoint(event, svg), original: doc };
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    }}
+                    onScaleDown={(event, corner) => {
+                      if (doc.layers.lens.locked || tool !== "select") return;
+                      event.stopPropagation();
+                      dragRef.current = { kind: "scale", corner, start: svgPoint(event, svg), original: doc };
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    }}
+                  />
+                )}
+                {doc.layers.drills.visible && <DrillLayer doc={doc} />}
+                {doc.layers.measurements.visible && bounds && <MeasurementLayer bounds={bounds} dblMm={doc.dblMm} />}
+              </g>
+            </svg>
+          </div>
+          {/* Canvas overlays */}
+          <div style={{ position: "absolute", top: 10, right: 10, display: "flex", gap: 6, alignItems: "center" }}>
+            <DsBadge>Dimensions in mm</DsBadge>
+            <DsBadge>Right eye editable</DsBadge>
+          </div>
+          <div style={{ position: "absolute", bottom: 10, left: 10, right: 10, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px", background: "rgba(15,15,18,0.85)", border: `1px solid ${DT.border}`, backdropFilter: "blur(8px)", borderRadius: 7, fontSize: 11.5, color: DT.muted, fontFamily: DT.font }}>
+              {tool === "select" ? (
+                <span><b style={{ color: DT.fg }}>Selection</b> — drag to move, corner to scale. <KbdKey>A</KbdKey> for anchor edit.</span>
+              ) : (
+                <span><b style={{ color: DT.fg }}>Direct selection</b> — drag anchor or handle. <KbdKey>⇧</KbdKey> multi-select. <KbdKey>⌫</KbdKey> delete.</span>
+              )}
+              {selectedAnchorObjects.length > 0 && (
+                <span style={{ color: DT.annotationLabel }}>{selectedAnchorObjects.length} anchor{selectedAnchorObjects.length !== 1 ? "s" : ""} selected</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right sidebar */}
+        <aside style={{ display: "flex", flexDirection: "column", gap: 10, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+          {/* Layers panel */}
+          <DsCard
+            header="Layers"
+            headerSub="Visibility and locks"
+          >
+            <div>
               {(Object.keys(doc.layers) as LayerKey[]).map((key) => (
-                <LayerRow
+                <DsLayerRow
                   key={key}
                   name={layerNames[key]}
+                  icon={layerIcons[key]}
                   state={doc.layers[key]}
                   selected={selectedLayer === key}
                   canLock={key === "face" || key === "lens" || key === "drills"}
@@ -250,158 +509,94 @@ export function LensDesigner() {
                   onToggleLock={() => commit((current) => updateLayer(current, key, { locked: !current.layers[key].locked }))}
                 />
               ))}
-              <LayerSettings doc={doc} selectedLayer={selectedLayer} commit={commit} />
-            </CardContent>
-          </Card>
+            </div>
+            <div style={{ borderTop: `1px solid ${DT.border}`, padding: "10px 12px" }}>
+              <LayerSettingsD doc={doc} selectedLayer={selectedLayer} commit={commit} />
+            </div>
+          </DsCard>
 
-          <Card className="min-w-0">
-            <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
-              <div>
-                <CardTitle>Designer</CardTitle>
-                <CardDescription>{doc.symmetryMode === "mirrored" ? "Mirrored R to L" : "Independent R/L"}</CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="flex overflow-hidden rounded-md border text-sm">
-                  <button className={toolButton(tool === "select")} onClick={() => setTool("select")} title="Selection tool (V)"><Move className="h-4 w-4" /></button>
-                  <button className={toolButton(tool === "direct")} onClick={() => setTool("direct")} title="Direct selection (A)"><PenLine className="h-4 w-4" /></button>
+          {/* Status */}
+          <DsCard
+            header={
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                Status
+                {exportData && exportData.warnings.length > 0
+                  ? <DsBadge tone="warn">{exportData.warnings.length} warning{exportData.warnings.length !== 1 ? "s" : ""}</DsBadge>
+                  : <DsBadge tone="success">All checks passing</DsBadge>
+                }
+              </span>
+            }
+            headerSub="Warnings do not block export"
+          >
+            {exportData && exportData.warnings.length > 0 ? (
+              exportData.warnings.map((w) => (
+                <div key={w.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "7px 12px", borderTop: `1px solid ${DT.border}` }}>
+                  <div style={{ width: 16, height: 16, borderRadius: 999, marginTop: 1, background: DT.warnBg, color: DT.warnColor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <AlertTriangle size={10} />
+                  </div>
+                  <span style={{ fontSize: 11.5, color: DT.fg, fontFamily: DT.font, lineHeight: 1.45 }}>{w.message}</span>
                 </div>
-                <Button variant="outline" size="icon" onClick={undo} disabled={history.length === 0} title="Undo"><RotateCcw className="h-4 w-4" /></Button>
-                <Button variant="outline" size="icon" onClick={() => setHelpOpen((v) => !v)} title="Shortcuts"><Keyboard className="h-4 w-4" /></Button>
+              ))
+            ) : (
+              <div style={{ padding: "8px 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 16, height: 16, borderRadius: 999, background: "rgba(34,197,94,0.12)", color: DT.success, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Check size={10} />
+                </div>
+                <span style={{ fontSize: 11.5, color: DT.mutedFg, fontFamily: DT.font }}>No warnings.</span>
               </div>
-            </CardHeader>
-            <CardContent className="relative">
-              {helpOpen && <ShortcutPopover />}
-              <div className="overflow-hidden rounded-md border bg-[hsl(var(--preview-background))]">
-                <svg
-                  viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-                  className="h-[min(72vh,720px)] min-h-[520px] w-full touch-none"
-                  onPointerMove={(event) => handlePointerMove(event, svg)}
-                  onPointerUp={(event) => handlePointerUp(event.currentTarget)}
-                  onPointerLeave={(event) => handlePointerUp(event.currentTarget)}
-                  onDoubleClick={(event) => insertAnchorAtEvent(event, svg)}
-                  role="application"
-                  aria-label="Lens designer"
-                >
-                  <defs>
-                    <pattern id="designer-grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="hsl(var(--preview-grid))" strokeWidth="0.7" />
-                    </pattern>
-                  </defs>
-                  <rect width={CANVAS_W} height={CANVAS_H} fill="url(#designer-grid)" />
-                  <g transform={svg.transform}>
-                    {doc.layers.face.visible && <FaceLayer doc={doc} />}
-                    {doc.layers.blanks.visible && <BlankLayer doc={doc} />}
-                    {doc.layers.template.visible && <TemplateLayer doc={doc} />}
-                    {doc.layers.reference.visible && <ReferenceLayer doc={doc} />}
-                    {doc.layers.lens.visible && (
-                      <LensLayer
-                        doc={doc}
-                        tool={tool}
-                        selectedAnchors={selectedAnchors}
-                        selectedHandle={selectedHandle}
-                        onPathDown={(event) => {
-                          if (tool !== "select" || doc.layers.lens.locked) return;
-                          dragRef.current = { kind: "path", start: svgPoint(event, svg), original: doc };
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                        }}
-                        onAnchorDown={(event, anchorId) => {
-                          if (doc.layers.lens.locked) return;
-                          event.stopPropagation();
-                          setTool("direct");
-                          setSelectedHandle(null);
-                          setSelectedAnchors((current) => event.shiftKey ? toggleInArray(current, anchorId) : [anchorId]);
-                          dragRef.current = { kind: "anchor", anchorId, start: svgPoint(event, svg), original: doc };
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                        }}
-                        onHandleDown={(event, anchorId, handle) => {
-                          if (doc.layers.lens.locked) return;
-                          event.stopPropagation();
-                          setTool("direct");
-                          setSelectedAnchors([anchorId]);
-                          setSelectedHandle({ anchorId, handle });
-                          dragRef.current = { kind: "handle", anchorId, handle, start: svgPoint(event, svg), original: doc };
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                        }}
-                        onScaleDown={(event, corner) => {
-                          if (doc.layers.lens.locked || tool !== "select") return;
-                          event.stopPropagation();
-                          dragRef.current = { kind: "scale", corner, start: svgPoint(event, svg), original: doc };
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                        }}
-                      />
-                    )}
-                    {doc.layers.drills.visible && <DrillLayer doc={doc} />}
-                    {doc.layers.measurements.visible && bounds && <MeasurementLayer bounds={bounds} dblMm={doc.dblMm} />}
-                  </g>
-                </svg>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="secondary">Right eye editable</Badge>
-                <span>Tool: {tool === "select" ? "Selection" : "Direct selection"}</span>
-                {selectedAnchorObjects.length > 0 && <span>{selectedAnchorObjects.length} anchor{selectedAnchorObjects.length === 1 ? "" : "s"} selected</span>}
-              </div>
-            </CardContent>
-          </Card>
+            )}
+          </DsCard>
 
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Status</CardTitle>
-                <CardDescription>Warnings do not block export.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {exportData && exportData.warnings.length > 0 ? exportData.warnings.map((warning) => (
-                  <div key={warning.id} className="rounded-md border border-warning-border bg-warning-background px-3 py-2 text-sm">{warning.message}</div>
-                )) : <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No configured warnings.</div>}
-              </CardContent>
-            </Card>
+          {/* Details */}
+          <DsCard header="Details" headerSub="Project and export metadata">
+            <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <DsTextField label="Project name" value={doc.name} onChange={(v) => commit((c) => ({ ...c, name: v }))} />
+              <DsTextField label="Job" value={doc.jobInfo.job} onChange={(v) => commit((c) => ({ ...c, jobInfo: { ...c.jobInfo, job: v } }))} />
+              <DsTextField label="VEN" value={doc.jobInfo.ven} onChange={(v) => commit((c) => ({ ...c, jobInfo: { ...c.jobInfo, ven: v } }))} />
+              <DsTextField label="MODEL" value={doc.jobInfo.model} onChange={(v) => commit((c) => ({ ...c, jobInfo: { ...c.jobInfo, model: v } }))} />
+              <DsNumberField label="DBL mm" value={doc.dblMm} onChange={(v) => commit((c) => ({ ...c, dblMm: v }))} />
+            </div>
+          </DsCard>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Details</CardTitle>
-                <CardDescription>Project and export metadata.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <TextField label="Project name" value={doc.name} onChange={(value) => commit((current) => ({ ...current, name: value }))} />
-                <TextField label="Job" value={doc.jobInfo.job} onChange={(value) => commit((current) => ({ ...current, jobInfo: { ...current.jobInfo, job: value } }))} />
-                <TextField label="VEN" value={doc.jobInfo.ven} onChange={(value) => commit((current) => ({ ...current, jobInfo: { ...current.jobInfo, ven: value } }))} />
-                <TextField label="MODEL" value={doc.jobInfo.model} onChange={(value) => commit((current) => ({ ...current, jobInfo: { ...current.jobInfo, model: value } }))} />
-                <NumberField label="DBL mm" value={doc.dblMm} onChange={(value) => commit((current) => ({ ...current, dblMm: value }))} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex-row items-center justify-between gap-2 space-y-0">
-                <div>
-                  <CardTitle>OMA Preview</CardTitle>
-                  <CardDescription>Exact rounded export radii.</CardDescription>
-                </div>
-                <select value={previewPointCount} onChange={(event) => setPreviewPointCount(Number(event.target.value) as 400 | 1000)} className="rounded-md border bg-background px-2 py-1 text-sm">
-                  <option value={400}>400</option>
-                  <option value={1000}>1000</option>
-                </select>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {exportData && <OmaPreview doc={doc} radii={exportData.preview.radii} />}
-                <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                  <span>H {exportData ? formatNumber(exportData.preview.hboxMm, 1) : "-"} mm</span>
-                  <span>V {exportData ? formatNumber(exportData.preview.vboxMm, 1) : "-"} mm</span>
-                  <span>C {exportData ? formatNumber(exportData.preview.circMm, 1) : "-"} mm</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {exportData?.files.map((file) => (
-                    <Button key={file.pointCount} variant={file.pointCount === 400 ? "default" : "outline"} onClick={() => downloadTextFile(file.fileName, file.content, "text/plain;charset=utf-8")}>
-                      <Download className="h-4 w-4" />
-                      {file.pointCount}
-                    </Button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </section>
+          {/* OMA preview */}
+          <DsCard
+            header="OMA Preview"
+            headerSub="Exact rounded export radii"
+            headerRight={
+              <select
+                value={previewPointCount}
+                onChange={(e) => setPreviewPointCount(Number(e.target.value) as 400 | 1000)}
+                style={{ background: DT.bg, border: `1px solid ${DT.border}`, borderRadius: 5, padding: "2px 6px", fontSize: 11, color: DT.fg, fontFamily: DT.font, cursor: "pointer" }}
+              >
+                <option value={400}>400</option>
+                <option value={1000}>1000</option>
+              </select>
+            }
+          >
+            <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+              {exportData && <OmaPreviewD radii={exportData.preview.radii} />}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 4, fontSize: 11, color: DT.mutedFg, fontFamily: DT.mono }}>
+                <span>H {exportData ? formatNumber(exportData.preview.hboxMm, 1) : "-"} mm</span>
+                <span>V {exportData ? formatNumber(exportData.preview.vboxMm, 1) : "-"} mm</span>
+                <span>C {exportData ? formatNumber(exportData.preview.circMm, 1) : "-"} mm</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {exportData?.files.map((file) => (
+                  <DsBtn
+                    key={file.pointCount}
+                    variant={file.pointCount === 400 ? "accent" : "secondary"}
+                    onClick={() => downloadTextFile(file.fileName, file.content, "text/plain;charset=utf-8")}
+                    leftIcon={<Download size={12} />}
+                  >
+                    {file.pointCount}
+                  </DsBtn>
+                ))}
+              </div>
+            </div>
+          </DsCard>
+        </aside>
       </div>
-    </main>
+    </DesignerRoot>
   );
 
   function handlePointerMove(event: PointerEvent<SVGSVGElement>, svgView: ReturnType<typeof getView>) {
@@ -439,13 +634,7 @@ export function LensDesigner() {
     setHistory((h) => [...h, drag.original].slice(-80));
     setFuture([]);
     dragRef.current = null;
-    try {
-      if ("releasePointerCapture" in target) {
-        // The active pointer id is not needed; browsers ignore non-captured ids inconsistently.
-      }
-    } catch {
-      // ignore
-    }
+    try { void target; } catch { /* ignore */ }
   }
 
   function deleteSelectedAnchors() {
@@ -453,7 +642,7 @@ export function LensDesigner() {
     if (doc.rightPath.anchors.length - selectedAnchors.length < 3) return;
     commit((current) => ({
       ...current,
-      rightPath: { ...current.rightPath, anchors: current.rightPath.anchors.filter((anchor) => !selectedAnchors.includes(anchor.id)) },
+      rightPath: { ...current.rightPath, anchors: current.rightPath.anchors.filter((a) => !selectedAnchors.includes(a.id)) },
     }));
     setSelectedAnchors([]);
     setSelectedHandle(null);
@@ -468,149 +657,327 @@ export function LensDesigner() {
   }
 }
 
-function readHandoff() {
-  const raw = sessionStorage.getItem(DESIGN_HANDOFF_KEY);
-  if (!raw) return null;
-  sessionStorage.removeItem(DESIGN_HANDOFF_KEY);
-  try {
-    return parseDesignFile(raw);
-  } catch {
-    return null;
-  }
+// ── Design system primitives ───────────────────────────────────────────────────
+
+function DesignerRoot({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ width: "100%", minHeight: "100vh", height: "100vh", background: DT.bg, color: DT.fg, display: "flex", flexDirection: "column", fontFamily: DT.font, overflow: "hidden" }}>
+      {children}
+    </div>
+  );
 }
 
-function DesignerHeader({ dirty, children }: { dirty: boolean; children?: React.ReactNode }) {
+function BananaMark({ size = 26 }: { size?: number }) {
   return (
-    <header className="flex flex-col gap-3 border-b pb-4 md:flex-row md:items-center md:justify-between">
-      <div>
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold">Lens Designer</h1>
-          {dirty && <Badge variant="secondary">Unsaved</Badge>}
+    <div style={{ width: size, height: size, borderRadius: 6, background: DT.accent, display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#1c1500", flexShrink: 0 }}>
+      <svg viewBox="0 0 24 24" width={size * 0.72} height={size * 0.72} fill="currentColor">
+        <path d="M5 4c0 6 4 13 12 14 .8.1 1.4-.7 1-1.4-1.4-2.4-3-6.4-3-11 0-.6-.6-1-1.2-.8C11 5.4 9 6 8 6c-1 0-1.7-.4-2.2-1A.7.7 0 0 0 5 4z" />
+        <path d="M4.5 3.8c.2-.4.8-.5 1.1-.2L7 4.8" stroke="#1c1500" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+      </svg>
+    </div>
+  );
+}
+
+function DesignerAppHeader({ filename, dirty, rightExtra }: { filename?: string; dirty?: boolean; rightExtra?: React.ReactNode }) {
+  return (
+    <header style={{ height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px", borderBottom: `1px solid ${DT.border}`, background: DT.bg, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+        <BananaMark size={26} />
+        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: DT.fg, letterSpacing: -0.1 }}>Banana Sport Optics</span>
+          <span style={{ fontSize: 10.5, color: DT.mutedFg, fontWeight: 500 }}>Lens Lab</span>
         </div>
-        <p className="text-sm text-muted-foreground">Bezier design document with OMA export preview.</p>
+        <div style={{ width: 1, alignSelf: "stretch", background: DT.border, margin: "0 4px" }} />
+        <nav style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: DT.mutedFg }}>
+          <Link to="/" style={{ color: DT.mutedFg, textDecoration: "none" }}>Tracer</Link>
+          <ChevronRight size={12} />
+          <span style={{ color: DT.fg, fontWeight: 500 }}>Designer</span>
+        </nav>
+        {filename && (
+          <>
+            <div style={{ width: 1, alignSelf: "stretch", background: DT.border, margin: "0 4px" }} />
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 9px", background: DT.card, border: `1px solid ${DT.border}`, borderRadius: 6, fontSize: 11.5, color: DT.muted, fontFamily: DT.mono }}>
+              <FileText size={12} />
+              <span>{filename}</span>
+              {dirty && <span style={{ width: 5, height: 5, borderRadius: 999, background: DT.accent, marginLeft: 2, flexShrink: 0 }} />}
+            </div>
+          </>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="ghost" asChild><Link to="/">Capture</Link></Button>
-        {children}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {rightExtra}
       </div>
     </header>
   );
 }
 
-function StartCard({ title, description, onClick }: { title: string; description: string; onClick: () => void }) {
+function DsBtn({ children, variant = "secondary", onClick, leftIcon, disabled, style }: {
+  children?: React.ReactNode; variant?: "default" | "secondary" | "accent" | "ghost"; onClick?: () => void;
+  leftIcon?: React.ReactNode; disabled?: boolean; style?: React.CSSProperties;
+}) {
+  const vars = {
+    default: { bg: DT.fg, color: "#0a0a0c", border: "transparent" },
+    secondary: { bg: DT.card, color: DT.fg, border: DT.border },
+    accent: { bg: DT.accent, color: "#1c1500", border: "transparent" },
+    ghost: { bg: "transparent", color: DT.fg, border: "transparent" },
+  };
+  const v = vars[variant];
   return (
-    <Card className="flex min-h-[220px] flex-col">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="mt-auto">
-        <Button className="w-full" onClick={onClick}>Start</Button>
-      </CardContent>
-    </Card>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{ height: 30, padding: "0 11px", fontSize: 12.5, lineHeight: 1, gap: 6, background: v.bg, color: v.color, border: `1px solid ${v.border}`, borderRadius: 6, fontFamily: DT.font, fontWeight: 500, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: disabled ? "not-allowed" : "pointer", whiteSpace: "nowrap", userSelect: "none", opacity: disabled ? 0.45 : 1, ...style }}
+    >
+      {leftIcon}{children}
+    </button>
   );
 }
 
-function HiddenInputs({ projectInputRef, omaInputRef, onProject, onOma }: {
-  projectInputRef: React.RefObject<HTMLInputElement>;
-  omaInputRef: React.RefObject<HTMLInputElement>;
-  onProject: (file: File) => void;
-  onOma: (file: File) => void;
+function DsIconBtn({ icon, onClick, title, disabled, size = 30 }: {
+  icon: React.ReactNode; onClick?: () => void; title?: string; disabled?: boolean; size?: number;
 }) {
   return (
-    <>
-      <input ref={projectInputRef} type="file" accept=".lensdesign,application/json" className="hidden" onChange={(event) => pickFile(event, onProject)} />
-      <input ref={omaInputRef} type="file" accept=".oma,.OMA,text/plain" className="hidden" onChange={(event) => pickFile(event, onOma)} />
-    </>
+    <button onClick={onClick} title={title} disabled={disabled} style={{ width: size, height: size, background: DT.card, color: disabled ? DT.subtle : DT.muted, border: `1px solid ${DT.border}`, borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 0, opacity: disabled ? 0.45 : 1 }}>
+      {icon}
+    </button>
   );
 }
 
-function pickFile(event: ChangeEvent<HTMLInputElement>, cb: (file: File) => void) {
-  const file = event.currentTarget.files?.[0];
-  event.currentTarget.value = "";
-  if (file) void cb(file);
+function DsBadge({ children, tone = "default" }: { children: React.ReactNode; tone?: "default" | "accent" | "warn" | "success" | "danger" }) {
+  const tones = {
+    default: { bg: DT.card, color: DT.muted, border: DT.border },
+    accent: { bg: DT.accentDim, color: DT.accent, border: "rgba(250,204,21,0.25)" },
+    warn: { bg: DT.warnBg, color: "#fbbf24", border: "rgba(245,158,11,0.3)" },
+    success: { bg: "rgba(34,197,94,0.12)", color: "#86efac", border: "rgba(34,197,94,0.3)" },
+    danger: { bg: DT.dangerBg, color: "#fca5a5", border: "rgba(239,68,68,0.3)" },
+  };
+  const t = tones[tone];
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 7px", fontSize: 10.5, fontWeight: 500, letterSpacing: 0.1, background: t.bg, color: t.color, border: `1px solid ${t.border}`, borderRadius: 5, fontFamily: DT.font, whiteSpace: "nowrap", lineHeight: 1.4 }}>
+      {children}
+    </span>
+  );
 }
 
-function StartError({ message }: { message: string }) {
-  return <div className="mx-auto mt-6 max-w-3xl rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm">{message}</div>;
+function DsCard({ children, header, headerSub, headerRight }: { children: React.ReactNode; header?: React.ReactNode; headerSub?: string; headerRight?: React.ReactNode }) {
+  return (
+    <div style={{ background: DT.card, border: `1px solid ${DT.border}`, borderRadius: 10, overflow: "hidden" }}>
+      {(header || headerRight) && (
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", padding: "10px 12px 8px", borderBottom: `1px solid ${DT.border}` }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: DT.fg, letterSpacing: -0.1 }}>{header}</div>
+            {headerSub && <div style={{ fontSize: 11, color: DT.mutedFg, marginTop: 2 }}>{headerSub}</div>}
+          </div>
+          {headerRight}
+        </div>
+      )}
+      {children}
+    </div>
+  );
 }
 
-function LayerRow({ name, state, selected, canLock, onSelect, onToggleVisible, onToggleLock }: {
-  name: string;
-  state: { visible: boolean; locked?: boolean };
-  selected: boolean;
-  canLock: boolean;
-  onSelect: () => void;
-  onToggleVisible: () => void;
-  onToggleLock: () => void;
+function KbdKey({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 18, height: 18, padding: "0 5px", background: DT.bg, border: `1px solid ${DT.borderStrong}`, borderBottomWidth: 2, borderRadius: 4, fontSize: 10, fontFamily: DT.mono, color: DT.muted, fontWeight: 600 }}>
+      {children}
+    </kbd>
+  );
+}
+
+function ToolBtn({ children, active, onClick, title, sc }: { children?: React.ReactNode; active?: boolean; onClick?: () => void; title?: string; sc?: string }) {
+  return (
+    <button onClick={onClick} title={title} style={{ width: 32, height: 32, position: "relative", borderRadius: 6, background: active ? DT.cardHover : "transparent", border: `1px solid ${active ? DT.borderStrong : "transparent"}`, color: active ? DT.fg : DT.muted, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0 }}>
+      {children}
+      {sc && <span style={{ position: "absolute", right: 2, bottom: 1, fontSize: 7, color: DT.subtle, fontFamily: DT.mono, fontWeight: 600 }}>{sc}</span>}
+    </button>
+  );
+}
+
+// ── Start card ────────────────────────────────────────────────────────────────
+function DsStartCard({ title, desc, meta = [], icon, footer, shapes, recommended, onClick }: {
+  title: string; desc: string; meta?: string[]; icon?: React.ReactNode; footer?: React.ReactNode;
+  shapes?: { name: string; onClick: () => void }[]; recommended?: boolean; onClick?: () => void;
 }) {
   return (
-    <div className={cn("flex items-center gap-2 rounded-md border px-2 py-1.5", selected && "border-ring bg-accent/60")} onClick={onSelect}>
-      <button type="button" onClick={(event) => { event.stopPropagation(); onToggleVisible(); }} title={state.visible ? "Hide" : "Show"}>
-        {state.visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+    <div
+      onClick={onClick}
+      style={{ background: DT.card, border: `1px solid ${recommended ? "rgba(250,204,21,0.4)" : DT.border}`, borderRadius: 10, padding: 18, position: "relative", cursor: "pointer", display: "flex", flexDirection: "column", gap: 12, boxShadow: recommended ? "0 0 0 1px rgba(250,204,21,0.1), 0 8px 28px rgba(0,0,0,0.3)" : "none" }}
+    >
+      {recommended && (
+        <div style={{ position: "absolute", top: 14, right: 14 }}>
+          <DsBadge tone="accent">Recommended</DsBadge>
+        </div>
+      )}
+      {icon && (
+        <div style={{ width: 64, height: 48, borderRadius: 8, background: DT.bg, border: `1px solid ${DT.border}`, color: DT.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {icon}
+        </div>
+      )}
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: DT.fg, marginBottom: 4, letterSpacing: -0.1 }}>{title}</div>
+        <div style={{ fontSize: 12.5, color: DT.muted, lineHeight: 1.5 }}>{desc}</div>
+      </div>
+      {meta.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+          {meta.map((m) => <DsBadge key={m}>{m}</DsBadge>)}
+        </div>
+      )}
+      {shapes && (
+        <div style={{ display: "flex", gap: 6, marginTop: "auto" }}>
+          {shapes.map((s) => (
+            <div key={s.name} onClick={(e) => { e.stopPropagation(); s.onClick(); }} title={s.name} style={{ flex: 1, height: 44, borderRadius: 6, background: DT.bg, border: `1px solid ${DT.border}`, color: DT.muted, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, fontSize: 9.5, fontWeight: 500, cursor: "pointer" }}>
+              <span style={{ color: DT.mutedFg }}>{s.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {footer && <div style={{ marginTop: "auto", paddingTop: 6 }}>{footer}</div>}
+    </div>
+  );
+}
+
+// ── Layer row ─────────────────────────────────────────────────────────────────
+function DsLayerRow({ name, icon, state, selected, canLock, onSelect, onToggleVisible, onToggleLock }: {
+  name: string; icon: React.ReactNode; state: { visible: boolean; locked?: boolean };
+  selected: boolean; canLock: boolean; onSelect: () => void; onToggleVisible: () => void; onToggleLock: () => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: selected ? "rgba(91,141,239,0.08)" : "transparent", borderLeft: `2px solid ${selected ? DT.selected : "transparent"}`, fontSize: 11.5, color: DT.fg, cursor: "pointer" }}
+    >
+      <span style={{ color: selected ? DT.selected : DT.mutedFg, display: "flex" }}>{icon}</span>
+      <span style={{ flex: 1, fontWeight: selected ? 500 : 400, color: selected ? DT.fg : DT.muted }}>{name}</span>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onToggleVisible(); }} style={{ width: 18, height: 18, padding: 0, background: "transparent", border: "none", color: state.visible ? DT.muted : DT.subtle, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {state.visible ? <Eye size={12} /> : <EyeOff size={12} />}
       </button>
-      <span className="min-w-0 flex-1 text-sm">{name}</span>
       {canLock && (
-        <button type="button" onClick={(event) => { event.stopPropagation(); onToggleLock(); }} title={state.locked ? "Unlock" : "Lock"}>
-          {state.locked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+        <button type="button" onClick={(e) => { e.stopPropagation(); onToggleLock(); }} style={{ width: 18, height: 18, padding: 0, background: "transparent", border: "none", color: state.locked ? DT.accent : DT.subtle, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {state.locked ? <Lock size={12} /> : <Unlock size={12} />}
         </button>
       )}
     </div>
   );
 }
 
-function LayerSettings({ doc, selectedLayer, commit }: {
+// ── Layer settings ────────────────────────────────────────────────────────────
+function LayerSettingsD({ doc, selectedLayer, commit }: {
   doc: LensDesignDocument;
   selectedLayer: LayerKey;
   commit: (updater: (current: LensDesignDocument) => LensDesignDocument) => void;
 }) {
   if (selectedLayer === "face") {
     return (
-      <div className="border-t pt-3">
-        <NumberField label="Face opacity" value={doc.face.opacity} step={0.05} onChange={(value) => commit((current) => ({ ...current, face: { ...current.face, opacity: clamp(value, 0, 1) } }))} />
-        <NumberField label="Face X mm" value={doc.face.xMm} onChange={(value) => commit((current) => ({ ...current, face: { ...current.face, xMm: value } }))} />
-        <NumberField label="Face Y mm" value={doc.face.yMm} onChange={(value) => commit((current) => ({ ...current, face: { ...current.face, yMm: value } }))} />
-        <NumberField label="Face scale" value={doc.face.scale} step={0.05} onChange={(value) => commit((current) => ({ ...current, face: { ...current.face, scale: Math.max(0.2, value) } }))} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <DsNumberField label="Opacity" value={doc.face.opacity} step={0.05} onChange={(v) => commit((c) => ({ ...c, face: { ...c.face, opacity: clamp(v, 0, 1) } }))} />
+        <DsNumberField label="X mm" value={doc.face.xMm} onChange={(v) => commit((c) => ({ ...c, face: { ...c.face, xMm: v } }))} />
+        <DsNumberField label="Y mm" value={doc.face.yMm} onChange={(v) => commit((c) => ({ ...c, face: { ...c.face, yMm: v } }))} />
+        <DsNumberField label="Scale" value={doc.face.scale} step={0.05} onChange={(v) => commit((c) => ({ ...c, face: { ...c.face, scale: Math.max(0.2, v) } }))} />
       </div>
     );
   }
   if (selectedLayer === "blanks") {
     return (
-      <div className="border-t pt-3">
-        <NumberField label="Blank PD mm" value={doc.blanks.binocularPdMm} onChange={(value) => commit((current) => ({ ...current, blanks: { ...current.blanks, binocularPdMm: value } }))} />
-        <NumberField label="Blank diameter mm" value={doc.blanks.diameterMm} onChange={(value) => commit((current) => ({ ...current, blanks: { ...current.blanks, diameterMm: value } }))} />
-        <NumberField label="Blank opacity" value={doc.blanks.opacity} step={0.05} onChange={(value) => commit((current) => ({ ...current, blanks: { ...current.blanks, opacity: clamp(value, 0, 1) } }))} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <DsNumberField label="Blank PD mm" value={doc.blanks.binocularPdMm} onChange={(v) => commit((c) => ({ ...c, blanks: { ...c.blanks, binocularPdMm: v } }))} />
+        <DsNumberField label="Blank diameter mm" value={doc.blanks.diameterMm} onChange={(v) => commit((c) => ({ ...c, blanks: { ...c.blanks, diameterMm: v } }))} />
+        <DsNumberField label="Opacity" value={doc.blanks.opacity} step={0.05} onChange={(v) => commit((c) => ({ ...c, blanks: { ...c.blanks, opacity: clamp(v, 0, 1) } }))} />
       </div>
     );
   }
-  return <div className="border-t pt-3 text-xs text-muted-foreground">Select face or blanks for layer-specific controls.</div>;
+  return <div style={{ fontSize: 11, color: DT.mutedFg }}>Select Face or Blanks for layer controls.</div>;
 }
 
+// ── Form fields ───────────────────────────────────────────────────────────────
+function DsTextField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 11, color: DT.mutedFg, fontWeight: 500 }}>{label}</span>
+      <input value={value} onChange={(e) => onChange(e.target.value)} style={{ background: DT.bg, border: `1px solid ${DT.border}`, borderRadius: 5, padding: "4px 8px", fontSize: 12, color: DT.fg, fontFamily: DT.font, outline: "none", width: "100%" }} />
+    </label>
+  );
+}
+
+function DsNumberField({ label, value, onChange, step = 0.1 }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 11, color: DT.mutedFg, fontWeight: 500 }}>{label}</span>
+      <input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(parseFloat(e.target.value) || 0)} style={{ background: DT.bg, border: `1px solid ${DT.border}`, borderRadius: 5, padding: "4px 8px", fontSize: 12, color: DT.fg, fontFamily: DT.mono, outline: "none", width: "100%" }} />
+    </label>
+  );
+}
+
+// ── Shortcut popover ──────────────────────────────────────────────────────────
+function ShortcutPopoverD({ onClose }: { onClose: () => void }) {
+  return (
+    <div style={{ position: "absolute", right: 12, top: 12, zIndex: 20, width: 280, background: DT.bgPanel, border: `1px solid ${DT.borderStrong}`, borderRadius: 8, padding: 14, boxShadow: "0 8px 28px rgba(0,0,0,0.4)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: DT.fg }}>Shortcuts</span>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: DT.subtle, cursor: "pointer", padding: 0 }}>✕</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "4px 8px", fontSize: 11, color: DT.muted }}>
+        {[
+          ["V", "Selection tool"],
+          ["A", "Direct selection"],
+          ["Shift", "Multi-select anchors"],
+          ["Del", "Delete anchors"],
+          ["Dbl-click", "Insert anchor"],
+          ["⌘Z", "Undo"],
+          ["⌘⇧Z", "Redo"],
+        ].map(([k, d]) => (
+          <>
+            <KbdKey key={k + "k"}>{k}</KbdKey>
+            <span key={k + "d"} style={{ alignSelf: "center" }}>{d}</span>
+          </>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── OMA preview ───────────────────────────────────────────────────────────────
+function OmaPreviewD({ radii }: { radii: number[] }) {
+  const pts = polarRadiiToPoints(radii);
+  const b = {
+    minX: Math.min(...pts.map((p) => p.x)),
+    maxX: Math.max(...pts.map((p) => p.x)),
+    minY: Math.min(...pts.map((p) => p.y)),
+    maxY: Math.max(...pts.map((p) => p.y)),
+  };
+  const w = b.maxX - b.minX || 1;
+  const h = b.maxY - b.minY || 1;
+  const scale = Math.min(240 / w, 120 / h);
+  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${140 + (p.x - (b.minX + w / 2)) * scale} ${70 - (p.y - (b.minY + h / 2)) * scale}`).join(" ") + " Z";
+  return (
+    <svg viewBox="0 0 280 140" style={{ width: "100%", height: 140, borderRadius: 6, background: DT.canvasBg, border: `1px solid ${DT.border}`, display: "block" }} aria-label="OMA export preview">
+      <path d={d} fill={DT.traceFill} stroke={DT.traceStroke} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// ── SVG layer components (updated to use DT colors) ───────────────────────────
 function FaceLayer({ doc }: { doc: LensDesignDocument }) {
   const o = doc.face.opacity;
   const s = doc.face.scale;
   return (
     <g opacity={o} transform={`translate(${doc.face.xMm} ${-doc.face.yMm}) scale(${s})`}>
-      <ellipse cx="0" cy="-4" rx="38" ry="52" fill="hsl(var(--muted))" stroke="hsl(var(--border))" />
-      <path d="M -44 -6 C -62 12 -62 42 -36 58 M 44 -6 C 62 12 62 42 36 58" fill="none" stroke="hsl(var(--border))" strokeWidth="2" />
-      <path d="M -20 -5 C -10 -10 10 -10 20 -5 M -15 18 C -5 24 6 24 16 18" fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth="1.4" />
-      <circle cx="-14" cy="2" r="2" fill="hsl(var(--muted-foreground))" />
-      <circle cx="14" cy="2" r="2" fill="hsl(var(--muted-foreground))" />
+      <ellipse cx="0" cy="-4" rx="38" ry="52" fill={DT.card} stroke={DT.border} />
+      <path d="M -44 -6 C -62 12 -62 42 -36 58 M 44 -6 C 62 12 62 42 36 58" fill="none" stroke={DT.border} strokeWidth="2" />
+      <path d="M -20 -5 C -10 -10 10 -10 20 -5 M -15 18 C -5 24 6 24 16 18" fill="none" stroke={DT.subtle} strokeWidth="1.4" />
+      <circle cx="-14" cy="2" r="2" fill={DT.subtle} />
+      <circle cx="14" cy="2" r="2" fill={DT.subtle} />
     </g>
   );
 }
 
 function BlankLayer({ doc }: { doc: LensDesignDocument }) {
-  const b = pathBounds(doc.rightPath);
-  const framePd = b.width + doc.dblMm;
-  const dec = (framePd - doc.blanks.binocularPdMm) / 2;
   const r = doc.blanks.diameterMm / 2;
-  const rightX = -((b.width + doc.dblMm) / 2) + b.width / 2 - dec;
-  const leftX = ((b.width + doc.dblMm) / 2) - b.width / 2 + dec;
+  const rightX = -doc.blanks.binocularPdMm / 2;
+  const leftX = doc.blanks.binocularPdMm / 2;
   return (
-    <g opacity={doc.blanks.opacity} fill="hsl(var(--annotation) / 0.08)" stroke="hsl(var(--annotation))" strokeDasharray="1.5 1.5">
-      <circle cx={rightX} cy={-b.cy} r={r} />
-      <circle cx={leftX} cy={-b.cy} r={r} />
+    <g opacity={doc.blanks.opacity} fill={DT.annotationDim + "14"} stroke={DT.annotation} strokeWidth="0.5" strokeDasharray="1.5 1.5">
+      <circle cx={rightX} cy={0} r={r} />
+      <circle cx={leftX} cy={0} r={r} />
     </g>
   );
 }
@@ -620,8 +987,8 @@ function TemplateLayer({ doc }: { doc: LensDesignDocument }) {
   const b = pathBounds(doc.rightPath);
   const offset = (b.width + doc.dblMm) / 2;
   return (
-    <g fill="none" stroke="hsl(var(--muted-foreground))" strokeWidth="0.5" opacity={doc.layers.template.opacity ?? 1}>
-      <text x={-offset - 28} y={-34} fontSize="3.5" fill="hsl(var(--muted-foreground))">{doc.templateSnapshot.name}</text>
+    <g fill="none" stroke={DT.subtle} strokeWidth="0.5" opacity={doc.layers.template.opacity ?? 1}>
+      <text x={-offset - 28} y={-34} fontSize="3.5" fill={DT.subtle}>{doc.templateSnapshot.name}</text>
       <path d={`M ${-offset - 20} -18 C ${-offset - 12} -25 ${offset + 12} -25 ${offset + 20} -18`} />
       <path d={`M ${-offset + 21} -12 L ${-offset + 34} -8 M ${offset - 21} -12 L ${offset - 34} -8`} />
     </g>
@@ -632,13 +999,11 @@ function ReferenceLayer({ doc }: { doc: LensDesignDocument }) {
   if (!doc.referenceTrace) return null;
   const pts = polarRadiiToPoints(doc.referenceTrace.radii);
   const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${-p.y}`).join(" ") + " Z";
-  return <path d={d} fill="none" stroke="hsl(var(--annotation))" strokeWidth="0.5" strokeDasharray="1.2 1.2" opacity={doc.layers.reference.opacity ?? 0.35} />;
+  return <path d={d} fill="none" stroke={DT.annotation} strokeWidth="0.5" strokeDasharray="1.2 1.2" opacity={doc.layers.reference.opacity ?? 0.35} />;
 }
 
 function LensLayer({ doc, tool, selectedAnchors, selectedHandle, onPathDown, onAnchorDown, onHandleDown, onScaleDown }: {
-  doc: LensDesignDocument;
-  tool: Tool;
-  selectedAnchors: string[];
+  doc: LensDesignDocument; tool: Tool; selectedAnchors: string[];
   selectedHandle: { anchorId: string; handle: "inHandle" | "outHandle" } | null;
   onPathDown: (event: PointerEvent<SVGPathElement>) => void;
   onAnchorDown: (event: PointerEvent<SVGCircleElement>, anchorId: string) => void;
@@ -652,26 +1017,31 @@ function LensLayer({ doc, tool, selectedAnchors, selectedHandle, onPathDown, onA
   const d = pathToSvg(doc.rightPath);
   return (
     <g>
-      <g transform={leftTransform} opacity="0.38">
-        <path d={d} fill="hsl(var(--trace-fill) / 0.55)" stroke="hsl(var(--trace-stroke))" strokeWidth="0.7" />
+      <g transform={leftTransform} opacity="0.35">
+        <path d={d} fill={DT.traceFill} stroke={DT.traceStrokeDim} strokeWidth="0.45" strokeDasharray="0.7 0.4" />
       </g>
       <g transform={rightTransform}>
-        <path d={d} fill="hsl(var(--trace-fill) / 0.68)" stroke="hsl(var(--trace-stroke))" strokeWidth="0.8" onPointerDown={onPathDown} className={tool === "select" ? "cursor-move" : ""} />
+        <path d={d} fill={DT.traceFill} stroke={DT.traceStroke} strokeWidth="0.55" onPointerDown={onPathDown} style={{ cursor: tool === "select" ? "move" : "default" }} />
         {tool === "select" && (
-          <g fill="none" stroke="hsl(var(--annotation))" strokeWidth="0.45" strokeDasharray="1 1">
+          <g fill="none" stroke={DT.annotation} strokeWidth="0.45" strokeDasharray="1 1">
             <rect x={b.minX} y={-b.maxY} width={b.width} height={b.height} />
             {(["nw", "ne", "se", "sw"] as const).map((corner) => {
               const x = corner.includes("w") ? b.minX : b.maxX;
               const y = corner.includes("n") ? -b.maxY : -b.minY;
-              return <rect key={corner} x={x - 1.2} y={y - 1.2} width="2.4" height="2.4" fill="hsl(var(--annotation-label))" stroke="hsl(var(--annotation))" onPointerDown={(event) => onScaleDown(event, corner)} />;
+              return <rect key={corner} x={x - 1.2} y={y - 1.2} width="2.4" height="2.4" fill={DT.annotationLabel} stroke={DT.annotation} onPointerDown={(event) => onScaleDown(event, corner)} style={{ cursor: "nwse-resize" }} />;
             })}
           </g>
         )}
         {tool === "direct" && doc.rightPath.anchors.map((anchor) => (
           <g key={anchor.id}>
-            {selectedAnchors.includes(anchor.id) && anchor.inHandle && <HandleLine anchor={anchor} handle="inHandle" selected={selectedHandle?.anchorId === anchor.id && selectedHandle.handle === "inHandle"} onHandleDown={onHandleDown} />}
-            {selectedAnchors.includes(anchor.id) && anchor.outHandle && <HandleLine anchor={anchor} handle="outHandle" selected={selectedHandle?.anchorId === anchor.id && selectedHandle.handle === "outHandle"} onHandleDown={onHandleDown} />}
-            <circle cx={anchor.point.x} cy={-anchor.point.y} r={selectedAnchors.includes(anchor.id) ? 1.4 : 1.05} fill={selectedAnchors.includes(anchor.id) ? "hsl(var(--annotation))" : "hsl(var(--annotation-label))"} stroke="hsl(var(--annotation))" strokeWidth="0.45" onPointerDown={(event) => onAnchorDown(event, anchor.id)} />
+            {selectedAnchors.includes(anchor.id) && anchor.inHandle && <HandleLineD anchor={anchor} handle="inHandle" selected={selectedHandle?.anchorId === anchor.id && selectedHandle.handle === "inHandle"} onHandleDown={onHandleDown} />}
+            {selectedAnchors.includes(anchor.id) && anchor.outHandle && <HandleLineD anchor={anchor} handle="outHandle" selected={selectedHandle?.anchorId === anchor.id && selectedHandle.handle === "outHandle"} onHandleDown={onHandleDown} />}
+            <circle cx={anchor.point.x} cy={-anchor.point.y} r={selectedAnchors.includes(anchor.id) ? 1.4 : 1.05}
+              fill={selectedAnchors.includes(anchor.id) ? DT.selected : DT.bg}
+              stroke={DT.selected} strokeWidth="0.45"
+              onPointerDown={(event) => onAnchorDown(event, anchor.id)}
+              style={{ cursor: "pointer" }}
+            />
           </g>
         ))}
       </g>
@@ -679,13 +1049,16 @@ function LensLayer({ doc, tool, selectedAnchors, selectedHandle, onPathDown, onA
   );
 }
 
-function HandleLine({ anchor, handle, selected, onHandleDown }: { anchor: LensAnchor; handle: "inHandle" | "outHandle"; selected: boolean; onHandleDown: (event: PointerEvent<SVGCircleElement>, anchorId: string, handle: "inHandle" | "outHandle") => void }) {
+function HandleLineD({ anchor, handle, selected, onHandleDown }: {
+  anchor: LensAnchor; handle: "inHandle" | "outHandle"; selected: boolean;
+  onHandleDown: (event: PointerEvent<SVGCircleElement>, anchorId: string, handle: "inHandle" | "outHandle") => void;
+}) {
   const p = anchor[handle];
   if (!p) return null;
   return (
     <g>
-      <line x1={anchor.point.x} y1={-anchor.point.y} x2={p.x} y2={-p.y} stroke="hsl(var(--annotation))" strokeWidth="0.4" />
-      <circle cx={p.x} cy={-p.y} r={selected ? 1.2 : 1} fill="hsl(var(--annotation-label))" stroke="hsl(var(--annotation))" strokeWidth="0.4" onPointerDown={(event) => onHandleDown(event, anchor.id, handle)} />
+      <line x1={anchor.point.x} y1={-anchor.point.y} x2={p.x} y2={-p.y} stroke={DT.selected} strokeWidth="0.4" />
+      <circle cx={p.x} cy={-p.y} r={selected ? 1.2 : 1} fill={DT.bg} stroke={DT.selected} strokeWidth="0.4" onPointerDown={(event) => onHandleDown(event, anchor.id, handle)} style={{ cursor: "pointer" }} />
     </g>
   );
 }
@@ -712,22 +1085,22 @@ function renderDrill(record: { x1: number; y1: number; x2: number | null; y2: nu
     const y2 = oy - record.y2;
     return (
       <g key={key}>
-        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="hsl(var(--drill-stroke))" strokeWidth={record.diameter} strokeLinecap="round" />
-        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="hsl(var(--drill-stroke))" strokeWidth={record.diameter + 4} strokeLinecap="round" strokeDasharray="1 1" opacity="0.5" />
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={DT.drillStroke} strokeWidth={record.diameter} strokeLinecap="round" />
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={DT.drillStroke} strokeWidth={record.diameter + 4} strokeLinecap="round" strokeDasharray="1 1" opacity="0.3" />
       </g>
     );
   }
   return (
     <g key={key}>
-      <circle cx={x1} cy={y1} r={r + 2} fill="none" stroke="hsl(var(--drill-stroke))" strokeDasharray="1 1" opacity="0.55" />
-      <circle cx={x1} cy={y1} r={Math.max(r, 0.8)} fill="hsl(var(--drill-fill) / 0.5)" stroke="hsl(var(--drill-stroke))" strokeWidth="0.4" />
+      <circle cx={x1} cy={y1} r={r + 2} fill="none" stroke={DT.safety} strokeDasharray="1 1" opacity="0.6" />
+      <circle cx={x1} cy={y1} r={Math.max(r, 0.8)} fill={DT.drillFill} stroke={DT.drillStroke} strokeWidth="0.4" />
     </g>
   );
 }
 
 function MeasurementLayer({ bounds, dblMm }: { bounds: ReturnType<typeof pathBounds>; dblMm: number }) {
   return (
-    <g fill="hsl(var(--preview-text))" fontSize="3.8">
+    <g fill={DT.annotationLabel} fontSize="3.8" fontFamily={DT.font}>
       <text x="-126" y="-80">HBOX {formatNumber(bounds.width, 1)} mm</text>
       <text x="-126" y="-74">VBOX {formatNumber(bounds.height, 1)} mm</text>
       <text x="-126" y="-68">DBL {formatNumber(dblMm, 1)} mm</text>
@@ -735,49 +1108,7 @@ function MeasurementLayer({ bounds, dblMm }: { bounds: ReturnType<typeof pathBou
   );
 }
 
-function OmaPreview({ radii }: { doc: LensDesignDocument; radii: number[] }) {
-  const pts = polarRadiiToPoints(radii);
-  const b = {
-    minX: Math.min(...pts.map((p) => p.x)),
-    maxX: Math.max(...pts.map((p) => p.x)),
-    minY: Math.min(...pts.map((p) => p.y)),
-    maxY: Math.max(...pts.map((p) => p.y)),
-  };
-  const w = b.maxX - b.minX || 1;
-  const h = b.maxY - b.minY || 1;
-  const scale = Math.min(240 / w, 150 / h);
-  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${160 + (p.x - (b.minX + w / 2)) * scale} ${90 - (p.y - (b.minY + h / 2)) * scale}`).join(" ") + " Z";
-  return (
-    <svg viewBox="0 0 320 180" className="h-[180px] w-full rounded-md border bg-[hsl(var(--preview-background))]" aria-label="OMA export preview">
-      <path d={d} fill="hsl(var(--trace-fill) / 0.7)" stroke="hsl(var(--trace-stroke))" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function ShortcutPopover() {
-  return (
-    <div className="absolute right-6 top-5 z-20 w-[300px] rounded-md border bg-popover p-4 text-sm shadow-md">
-      <div className="mb-2 flex items-center gap-2 font-semibold"><HelpCircle className="h-4 w-4" /> Shortcuts</div>
-      <div className="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 text-xs">
-        <kbd>V</kbd><span>Selection tool</span>
-        <kbd>A</kbd><span>Direct selection</span>
-        <kbd>Shift</kbd><span>Multi-select anchors / preserve scale aspect</span>
-        <kbd>Del</kbd><span>Delete selected anchors</span>
-        <kbd>Double click</kbd><span>Insert anchor on nearest segment</span>
-        <kbd>Cmd/Ctrl Z</kbd><span>Undo</span>
-      </div>
-    </div>
-  );
-}
-
-function TextField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="block space-y-1 text-sm"><span className="text-xs font-medium text-muted-foreground">{label}</span><input value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-md border bg-background px-3 py-1.5" /></label>;
-}
-
-function NumberField({ label, value, onChange, step = 0.1 }: { label: string; value: number; onChange: (value: number) => void; step?: number }) {
-  return <label className="mb-2 block space-y-1 text-sm"><span className="text-xs font-medium text-muted-foreground">{label}</span><input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(event) => onChange(parseFloat(event.target.value) || 0)} className="w-full rounded-md border bg-background px-3 py-1.5" /></label>;
-}
-
+// ── Layer metadata ─────────────────────────────────────────────────────────────
 const layerNames: Record<LayerKey, string> = {
   face: "Face",
   blanks: "Uncut blanks",
@@ -785,8 +1116,26 @@ const layerNames: Record<LayerKey, string> = {
   reference: "Original trace",
   lens: "Lens shape",
   drills: "Drill features",
-  measurements: "Warnings/measurements",
+  measurements: "Measurements",
 };
+
+const layerIcons: Record<LayerKey, React.ReactNode> = {
+  face: <Eye size={12} />,
+  blanks: <Circle size={12} />,
+  template: <Grid2X2 size={12} />,
+  reference: <Clock size={12} />,
+  lens: <Glasses size={12} />,
+  drills: <ScanLine size={12} />,
+  measurements: <AlertTriangle size={12} />,
+};
+
+// ── Utility functions (unchanged logic) ────────────────────────────────────────
+function readHandoff() {
+  const raw = sessionStorage.getItem(DESIGN_HANDOFF_KEY);
+  if (!raw) return null;
+  sessionStorage.removeItem(DESIGN_HANDOFF_KEY);
+  try { return parseDesignFile(raw); } catch { return null; }
+}
 
 function getView(doc: LensDesignDocument) {
   const zoom = doc.viewport.zoom * MM_TO_SVG;
@@ -861,11 +1210,7 @@ function nearestSegment(path: LensDesignDocument["rightPath"], point: LensPoint)
       const t = i / 24;
       const p = cubicPoint(p0, p1, p2, p3, t);
       const distance = Math.hypot(p.x - point.x, p.y - point.y);
-      if (distance < bestDistance) {
-        bestSegmentIndex = segmentIndex;
-        bestDistance = distance;
-        bestT = t;
-      }
+      if (distance < bestDistance) { bestSegmentIndex = segmentIndex; bestDistance = distance; bestT = t; }
     }
   });
   return bestSegmentIndex === -1 ? null : { segmentIndex: bestSegmentIndex, distance: bestDistance, t: bestT };
@@ -877,6 +1222,12 @@ function cubicPoint(p0: LensPoint, p1: LensPoint, p2: LensPoint, p3: LensPoint, 
     x: mt ** 3 * p0.x + 3 * mt ** 2 * t * p1.x + 3 * mt * t ** 2 * p2.x + t ** 3 * p3.x,
     y: mt ** 3 * p0.y + 3 * mt ** 2 * t * p1.y + 3 * mt * t ** 2 * p2.y + t ** 3 * p3.y,
   };
+}
+
+function pickFile(event: ChangeEvent<HTMLInputElement>, cb: (file: File) => void) {
+  const file = event.currentTarget.files?.[0];
+  event.currentTarget.value = "";
+  if (file) void cb(file);
 }
 
 function toggleInArray(values: string[], value: string) {
@@ -891,14 +1242,5 @@ function isTextEntryTarget(target: EventTarget | null) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
 }
 
-function toolButton(active: boolean) {
-  return `px-3 py-2 transition-colors ${active ? "bg-primary text-primary-foreground" : "hover:bg-accent"}`;
-}
-
-function clampScale(value: number) {
-  return clamp(value, 0.2, 4);
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
+function clampScale(value: number) { return clamp(value, 0.2, 4); }
+function clamp(value: number, min: number, max: number) { return Math.min(max, Math.max(min, value)); }
