@@ -67,8 +67,7 @@ import {
   type SerialLogEntry,
   WebSerialTransport,
 } from "@/lib/web-serial-transport";
-import bananaOpticsLogoDarkUrl from "@/assets/banana-optics-logo-dark.svg";
-import bananaOpticsLogoUrl from "@/assets/banana-optics-logo.svg";
+import bananaLabLogoUrl from "@/assets/banana-lab-logo.png";
 
 interface UiLogEntry {
   id: number;
@@ -251,7 +250,7 @@ export function App() {
     [omaFiles],
   );
   const selectedOma = downloadPointCount === 400 ? primaryOma : secondaryOma;
-  const logoUrl = isDarkTheme ? bananaOpticsLogoDarkUrl : bananaOpticsLogoUrl;
+  const logoUrl = bananaLabLogoUrl;
 
   useEffect(() => {
     const closeTransport = () => {

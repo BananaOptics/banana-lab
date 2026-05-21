@@ -1,0 +1,39 @@
+# Banana Optics Lab
+
+> A browser-based optical lab tool for capturing eyeglass frame traces, editing OMA files, and exporting data for lens edgers.
+
+## What this app does
+
+Banana Optics Lab is a web application for optical labs and opticians. It has two main tools:
+
+### Frame Tracer (/)
+
+Connects to a Nidek LT-900 physical frame tracer over a USB serial adapter using the browser's Web Serial API (Chrome or Edge on desktop required). The workflow is:
+
+1. Connect the tracer via USB serial
+2. Place an eyeglass frame in the tracer and press Read Trace
+3. The app reads the serial protocol, decodes the raw trace data (400 or 1000 radii points), and renders a live preview
+4. The user reviews frame measurements (HBOX, VBOX, CIRC, FCRV, DBL) and enters metadata (brand, model, wrap angle, pantoscopic tilt)
+5. For rimless frames, drill hole records (position, diameter) can be added and validated against the frame outline
+6. The completed job is exported as a standard OMA (.oma) file compatible with lab edgers
+
+OMA files can also be opened directly from disk (drag-and-drop or file picker) and edited without a physical tracer.
+
+### Lens Designer (/designer)
+
+An interactive canvas tool for creating and editing lens outline shapes. Designs can be started from a captured trace or from scratch, and exported as OMA files.
+
+## File formats
+
+- **OMA** (.oma): The industry-standard optical manufacturing format used to transfer frame shape data between tracers and edgers. This app reads and writes OMA files containing fields like HBOX, VBOX, CIRC, FCRV, DBL, ZTILT (wrap), PTILT (panto), and R/ADD point arrays.
+
+## Technical notes
+
+- Built with React, TypeScript, and Vite; deployed as a static SPA on GitHub Pages
+- Hardware tracing requires Web Serial API (Chrome 89+ or Edge 89+ on desktop)
+- OMA file editing and the lens designer work in all modern browsers
+- No data is sent to any server; everything runs locally in the browser
+
+## About
+
+Made by Banana Optics. Source hosted on GitHub under the BananaOptics organization.
