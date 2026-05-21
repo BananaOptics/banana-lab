@@ -27,41 +27,43 @@ export class ByteQueue {
     this.bytes = [];
   }
 
-  async readByte(timeoutMs: number): Promise<number | null> {
-    const ready = await this.waitForLength(1, timeoutMs);
+  async readByte(timeoutMs: number, signal?: AbortSignal): Promise<number | null> {
+    const ready = await this.waitForLength(1, timeoutMs, signal);
     if (!ready) return null;
     return this.bytes.shift() ?? null;
   }
 
-  async readBytes(count: number, timeoutMs: number): Promise<Uint8Array | null> {
-    const ready = await this.waitForLength(count, timeoutMs);
+  async readBytes(count: number, timeoutMs: number, signal?: AbortSignal): Promise<Uint8Array | null> {
+    const ready = await this.waitForLength(count, timeoutMs, signal);
     if (!ready) return null;
     return Uint8Array.from(this.bytes.splice(0, count));
   }
 
-  async waitForByte(expected: number, timeoutMs: number): Promise<boolean> {
+  async waitForByte(expected: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
+      if (signal?.aborted) return false;
       while (this.bytes.length > 0) {
         const byte = this.bytes.shift();
         if (byte === expected) return true;
       }
 
       const remaining = Math.max(1, deadline - Date.now());
-      await this.waitForData(remaining);
+      await this.waitForData(remaining, signal);
     }
 
     return false;
   }
 
-  private async waitForLength(count: number, timeoutMs: number): Promise<boolean> {
+  private async waitForLength(count: number, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     if (this.bytes.length >= count) return true;
 
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal?.aborted) return false;
       const remaining = Math.max(1, deadline - Date.now());
-      const ready = await this.waitForData(remaining);
+      const ready = await this.waitForData(remaining, signal);
       if (!ready) return this.bytes.length >= count;
       if (this.bytes.length >= count) return true;
     }
@@ -69,7 +71,8 @@ export class ByteQueue {
     return this.bytes.length >= count;
   }
 
-  private waitForData(timeoutMs: number): Promise<boolean> {
+  private waitForData(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
     if (this.bytes.length > 0) {
       // Yield to the macro-task queue via setTimeout so pending I/O (serial
       // reads) can deliver bytes before we re-check the queue length.
@@ -87,11 +90,17 @@ export class ByteQueue {
         cleanup();
         resolve(false);
       }, timeoutMs);
+      const onAbort = () => {
+        cleanup();
+        resolve(false);
+      };
       const cleanup = () => {
         window.clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         this.waiters = this.waiters.filter((waiter) => waiter !== onData);
       };
       this.waiters.push(onData);
+      signal?.addEventListener("abort", onAbort);
     });
   }
 }

@@ -214,6 +214,7 @@ export function App() {
   const [downloadPointCount, setDownloadPointCount] = useState<400 | 1000>(400);
   const [frameDetailsExpanded, setFrameDetailsExpanded] = useState(false);
   const transportRef = useRef<WebSerialTransport | null>(null);
+  const traceCancelRef = useRef<AbortController | null>(null);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
   const downloadMenuRef = useRef<HTMLDivElement>(null);
@@ -411,9 +412,15 @@ export function App() {
     }
   };
 
+  const cancelTrace = () => {
+    traceCancelRef.current?.abort();
+  };
+
   const startTrace = async () => {
     const transport = transportRef.current;
     if (!transport) return;
+    const controller = new AbortController();
+    traceCancelRef.current = controller;
     setBusy(true);
     setError(null);
     setTrace(null);
@@ -427,6 +434,7 @@ export function App() {
     try {
       const result = await readLt900Trace(transport, {
         onEvent: (event) => handleProtocolEvent(event),
+        signal: controller.signal,
       });
       const t = result.trace;
       console.group(`Trace — side=${t.metadata.side}`);
@@ -461,12 +469,19 @@ export function App() {
       setDocumentSource({ type: "tracer" });
       setWorkflow("editor");
     } catch (traceError) {
-      const message = messageFromError(traceError);
-      setError({ title: "Trace failed", message });
-      setPhase("error");
-      setStatusText(message);
-      addLog({ level: "error", message });
+      if (traceError instanceof DOMException && traceError.name === "AbortError") {
+        setPhase("idle");
+        setProgress(0);
+        setStatusText("Trace cancelled.");
+      } else {
+        const message = messageFromError(traceError);
+        setError({ title: "Trace failed", message });
+        setPhase("error");
+        setStatusText(message);
+        addLog({ level: "error", message });
+      }
     } finally {
+      traceCancelRef.current = null;
       setBusy(false);
     }
   };
@@ -774,14 +789,17 @@ export function App() {
                     </Button>
                   </div>
                 )}
-                <Button onClick={startTrace} disabled={!connected || busy}>
-                  {busy && phase !== "idle" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                {busy && phase !== "idle" ? (
+                  <Button variant="outline" onClick={cancelTrace}>
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                ) : (
+                  <Button onClick={startTrace} disabled={!connected || busy}>
                     <Play className="h-4 w-4" />
-                  )}
-                  Read trace
-                </Button>
+                    Read trace
+                  </Button>
+                )}
               </>
             )}
             {showReset && (
@@ -1311,6 +1329,7 @@ export function App() {
           onConnect={connect}
           onDisconnect={disconnect}
           onReadTrace={startTrace}
+          onCancel={cancelTrace}
           onReleasePorts={releasePorts}
           onClearLogs={() => setLogs([])}
           onClose={() => setCaptureDialogOpen(false)}
@@ -1359,6 +1378,7 @@ function CaptureDialog({
   onConnect,
   onDisconnect,
   onReadTrace,
+  onCancel,
   onReleasePorts,
   onClearLogs,
   onClose,
@@ -1378,6 +1398,7 @@ function CaptureDialog({
   onConnect: () => void;
   onDisconnect: () => void;
   onReadTrace: () => void;
+  onCancel: () => void;
   onReleasePorts: () => void;
   onClearLogs: () => void;
   onClose: () => void;
@@ -1525,18 +1546,25 @@ function CaptureDialog({
                 Disconnect
               </Button>
             )}
-            <Button
-              onClick={onReadTrace}
-              disabled={!connected || busy}
-              className="flex-1"
-            >
-              {busy && phase !== "idle" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+            {busy && phase !== "idle" ? (
+              <Button
+                variant="outline"
+                onClick={onCancel}
+                className="flex-1"
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                onClick={onReadTrace}
+                disabled={!connected || busy}
+                className="flex-1"
+              >
                 <Play className="h-4 w-4" />
-              )}
-              Read trace
-            </Button>
+                Read trace
+              </Button>
+            )}
           </div>
 
           {!connected && (

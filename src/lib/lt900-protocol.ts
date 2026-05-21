@@ -35,6 +35,7 @@ export interface Lt900Event {
 
 export interface Lt900ReadOptions {
   onEvent?: (event: Lt900Event) => void;
+  signal?: AbortSignal;
 }
 
 export interface Lt900ReadResult {
@@ -46,27 +47,30 @@ export async function readLt900Trace(
   transport: WebSerialTransport,
   options: Lt900ReadOptions = {},
 ): Promise<Lt900ReadResult> {
+  const { signal } = options;
   const emit = (event: Lt900Event) => options.onEvent?.(event);
 
   emit({ phase: "handshake", message: "Sending ENQ.", progress: 5 });
   await transport.write(Uint8Array.from([ENQ]));
-  await requireAck(transport, 2_000, "ENQ");
+  await requireAck(transport, 2_000, "ENQ", signal);
 
   emit({ phase: "handshake", message: "Sending native read command.", progress: 15 });
   await transport.write(READ_COMMAND);
-  await requireAck(transport, 2_000, "native read command");
+  await requireAck(transport, 2_000, "native read command", signal);
 
   emit({ phase: "status", message: "Entering transfer phase.", progress: 25 });
   await transport.write(Uint8Array.from([EOT]));
 
-  const deviceEnq = await transport.queue.readByte(5_000);
+  const deviceEnq = await transport.queue.readByte(5_000, signal);
+  throwIfAborted(signal);
   if (deviceEnq !== ENQ) {
     throw new Error(`Expected device ENQ after EOT, received ${formatByte(deviceEnq)}.`);
   }
 
   await sendAck(transport, "device ENQ");
 
-  const statusCommand = await transport.queue.readByte(30_000);
+  const statusCommand = await transport.queue.readByte(30_000, signal);
+  throwIfAborted(signal);
   if (statusCommand !== 0x52) {
     throw new Error(`Expected status command 52, received ${formatByte(statusCommand)}.`);
   }
@@ -74,19 +78,21 @@ export async function readLt900Trace(
   emit({ phase: "status", message: "Status command received.", progress: 35 });
   await sendAck(transport, "status command");
 
-  const statusA = await transport.queue.readBytes(2, 10_000);
+  const statusA = await transport.queue.readBytes(2, 10_000, signal);
+  throwIfAborted(signal);
   if (!statusA) throw new Error("Timed out waiting for first status part.");
   emit({ phase: "status", message: `Status part ${hex(statusA)}.`, progress: 42 });
   await sendAck(transport, "first status part");
 
-  const statusB = await transport.queue.readBytes(2, 10_000);
+  const statusB = await transport.queue.readBytes(2, 10_000, signal);
+  throwIfAborted(signal);
   if (!statusB) throw new Error("Timed out waiting for final status part.");
   emit({ phase: "status", message: `Status part ${hex(statusB)}.`, progress: 48 });
   await sendAck(transport, "final status part");
   const initialFrameMarker = findNativeFrameMarker(statusB);
 
   emit({ phase: "capture", message: "Waiting for native frame marker.", progress: 50 });
-  const rawFrame = await captureNativeFrame(transport, emit, initialFrameMarker);
+  const rawFrame = await captureNativeFrame(transport, emit, initialFrameMarker, signal);
 
   emit({ phase: "decode", message: "Decoding native trace.", progress: 92 });
   const trace = decodeNidekNativeTrace(rawFrame);
@@ -95,8 +101,13 @@ export async function readLt900Trace(
   return { trace, rawFrame };
 }
 
-async function requireAck(transport: WebSerialTransport, timeoutMs: number, label: string) {
-  const ok = await transport.queue.waitForByte(ACK, timeoutMs);
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException("Trace cancelled.", "AbortError");
+}
+
+async function requireAck(transport: WebSerialTransport, timeoutMs: number, label: string, signal?: AbortSignal) {
+  const ok = await transport.queue.waitForByte(ACK, timeoutMs, signal);
+  throwIfAborted(signal);
   if (!ok) throw new Error(`Timed out waiting for ACK after ${label}.`);
 }
 
@@ -109,6 +120,7 @@ async function captureNativeFrame(
   transport: WebSerialTransport,
   emit: (event: Lt900Event) => void,
   initialFrameMarker: number | null = null,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const rawFrame: number[] = [];
   const headerlessFrame: number[] = [];
@@ -137,7 +149,8 @@ async function captureNativeFrame(
   };
 
   if (initialFrameMarker !== null) {
-    const header = await readHeaderAfterMarker(transport, initialFrameMarker, markerDeadline);
+    const header = await readHeaderAfterMarker(transport, initialFrameMarker, markerDeadline, signal);
+    throwIfAborted(signal);
     if (header && isPlausibleNidekNativeHeader(header)) {
       rawFrame.push(...header);
       emit({ phase: "capture", message: `Native frame header found from status boundary: ${hex(header)}.`, progress: 58 });
@@ -148,13 +161,15 @@ async function captureNativeFrame(
   }
 
   while (Date.now() < markerDeadline) {
+    throwIfAborted(signal);
     if (rawFrame.length > 0) break;
     if (cleanLengthForRawLength(headerlessFrame.length) >= HEADERLESS_RIMLESS_CLEAN_FRAME_LENGTH) {
       emit({ phase: "capture", message: "Headerless rimless frame captured.", progress: 90 });
       return Uint8Array.from(headerlessFrame);
     }
 
-    const byte = await transport.queue.readByte(Math.max(1, markerDeadline - Date.now()));
+    const byte = await transport.queue.readByte(Math.max(1, markerDeadline - Date.now()), signal);
+    throwIfAborted(signal);
     if (byte === null) break;
 
     if (!isNativeFrameMarker(byte)) {
@@ -162,7 +177,8 @@ async function captureNativeFrame(
       continue;
     }
 
-    const header = await readHeaderAfterMarker(transport, byte, markerDeadline);
+    const header = await readHeaderAfterMarker(transport, byte, markerDeadline, signal);
+    throwIfAborted(signal);
     if (!header) break;
     if (isPlausibleNidekNativeHeader(header)) {
       rawFrame.push(...header);
@@ -190,10 +206,12 @@ async function captureNativeFrame(
   const captureStarted = Date.now();
 
   while (Date.now() - captureStarted < 60_000) {
+    throwIfAborted(signal);
     const cleanLength = cleanLengthForRawLength(rawFrame.length);
 
     if (cleanLength >= MIN_CLEAN_FRAME_LENGTH) {
-      const extraByte = await transport.queue.readByte(1_000);
+      const extraByte = await transport.queue.readByte(1_000, signal);
+      throwIfAborted(signal);
       if (extraByte === null) break;
       if (extraByte === EOT && rawFrame.length % 129 === 0) {
         emit({ phase: "capture", message: "Transfer EOT received.", progress: 90 });
@@ -201,7 +219,8 @@ async function captureNativeFrame(
       }
       rawFrame.push(extraByte);
     } else {
-      const byte = await transport.queue.readByte(10_000);
+      const byte = await transport.queue.readByte(10_000, signal);
+      throwIfAborted(signal);
       if (byte === null) {
         throw new Error(`Timed out while reading trace data at ${cleanLength} clean bytes.`);
       }
@@ -230,9 +249,10 @@ function readHeaderAfterMarker(
   transport: WebSerialTransport,
   marker: number,
   deadline: number,
+  signal?: AbortSignal,
 ): Promise<number[] | null> {
   return transport.queue
-    .readBytes(NIDEK_FRAME_HEADER_LENGTH - 1, Math.max(1, deadline - Date.now()))
+    .readBytes(NIDEK_FRAME_HEADER_LENGTH - 1, Math.max(1, deadline - Date.now()), signal)
     .then((rest) => (rest ? [marker, ...Array.from(rest)] : null));
 }
 
