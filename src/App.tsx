@@ -598,8 +598,8 @@ export function App() {
     const file = event.dataTransfer.files?.[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith(".oma")) {
-      const message = "Drop an .oma file to open it.";
+    if (!file.name.toLowerCase().endsWith(".oma") && !file.name.toLowerCase().endsWith(".vca")) {
+      const message = "Drop an .oma or .vca file to open it.";
       setError({ title: "Could not open OMA", message });
       setStatusText(message);
       return;
@@ -738,7 +738,7 @@ export function App() {
             <input
               ref={omaFileInputRef}
               type="file"
-              accept=".oma,.OMA,text/plain"
+              accept=".oma,.OMA,.vca,.VCA,text/plain"
               className="hidden"
               onChange={handleOmaFileSelected}
             />
@@ -973,7 +973,7 @@ export function App() {
                                 setJobInfo((p) => ({
                                   ...p,
                                   job: e.target.value.replace(
-                                    /(?:_(?:400|1000))?\.oma$/i,
+                                    /(?:_(?:400|1000))?\.(?:oma|vca)$/i,
                                     "",
                                   ),
                                 }))

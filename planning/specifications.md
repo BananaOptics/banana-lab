@@ -8,8 +8,10 @@ connection, previews the traced shape, and exports an OMA file.
 
 ## Confirmed Product Scope
 
-- The application is browser-only. There is no backend, local daemon, native
-  bridge, or Node serial service in v1.
+- Tracer communication runs in the web client. There is no local daemon, native
+  bridge, or Node serial service between the browser and the tracer.
+- The product may use server-backed persistence for business data, trace files,
+  selected tracer profiles, and tracer communication diagnostics.
 - The application uses the Web Serial API for direct serial communication from
   the browser.
 - The frontend stack is React, TypeScript, Vite, Tailwind CSS, and shadcn/ui.
@@ -22,6 +24,23 @@ connection, previews the traced shape, and exports an OMA file.
   `navigator.serial` is unavailable.
 - The app must run from a secure context: `localhost` during development and
   HTTPS in production.
+
+## Multi-Tracer Expansion Constraint
+
+Future tracer support must preserve client-side tracer I/O unless that decision
+is revisited explicitly.
+
+- Prefer tracer protocols that can run through browser-exposed transports,
+  starting with Web Serial.
+- OMA file import/export is separate from live OMA tracer communication. Adding
+  live OMA support means implementing the OMA communication state machine over a
+  browser-available transport.
+- Broad tracer coverage is constrained by the browser runtime. Drivers that
+  require native-only access, such as WinUSB-style device handling or a local
+  service/bridge, are out of scope under the client-side tracer I/O constraint.
+- LAN tracer support must be evaluated against browser transport constraints
+  before it is added; raw TCP and service-based LAN paths do not automatically
+  map to a web client.
 
 ## User Workflow
 

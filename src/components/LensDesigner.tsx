@@ -264,7 +264,7 @@ export function LensDesigner() {
   const hiddenInputs = (
     <>
       <input ref={projectInputRef} type="file" accept=".lensdesign,application/json" style={{ display: "none" }} onChange={(e) => pickFile(e, openProject)} />
-      <input ref={omaInputRef} type="file" accept=".oma,.OMA,text/plain" style={{ display: "none" }} onChange={(e) => pickFile(e, openOma)} />
+      <input ref={omaInputRef} type="file" accept=".oma,.OMA,.vca,.VCA,text/plain" style={{ display: "none" }} onChange={(e) => pickFile(e, openOma)} />
     </>
   );
 
@@ -312,7 +312,7 @@ export function LensDesigner() {
                 desc="Convert a tracer file into editable Bezier anchors. Drill records preserved."
                 meta={["Auto-simplify", "Reference layer kept"]}
                 icon={<FileUp size={26} />}
-                footer={<span style={{ fontSize: 11, color: DT.subtle }}>Accepts .oma files</span>}
+                footer={<span style={{ fontSize: 11, color: DT.subtle }}>Accepts .oma / .vca files</span>}
                 onClick={() => omaInputRef.current?.click()}
               />
               <DsStartCard

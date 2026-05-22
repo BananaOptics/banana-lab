@@ -127,7 +127,7 @@ function formatDrillRecord(r: DrillRecord): string {
 }
 
 function cleanJob(job: string) {
-  return (job || "lens_design").replace(/(?:_(?:400|1000))?\.oma$/i, "") || "lens_design";
+  return (job || "lens_design").replace(/(?:_(?:400|1000))?\.(?:oma|vca)$/i, "") || "lens_design";
 }
 
 export function validateDesign(doc: LensDesignDocument): DesignWarning[] {

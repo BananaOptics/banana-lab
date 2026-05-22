@@ -8,7 +8,7 @@ Use this as the designer-facing summary of the current product. For the future l
 
 - The app connects to a Nidek LT-900 tracer through Web Serial in supported desktop Chromium browsers.
 - Users can capture a physical trace, open an existing `.oma` file, preview lens geometry, edit frame metadata, manage drill records, and download OMA exports.
-- The product is client-only: no backend, account system, project dashboard, or marketing funnel exists in the current app.
+- Tracer I/O stays in the browser; future product work may add server-backed trace storage, business records, and diagnostic logging without a local tracer bridge.
 - Core user confidence comes from clear states, visible measurements, accurate geometry, and cautious export warnings.
 
 ## Primary Users
