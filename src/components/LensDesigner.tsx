@@ -257,7 +257,7 @@ export function LensDesigner() {
       startNew(createDesignFromTrace(parsed.trace, { fileName: parsed.fileName, jobInfo: parsed.jobInfo, drillRecords: parsed.drillRecords }));
       setError(parsed.warnings.join(" ") || null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not open OMA file.");
+      setError(e instanceof Error ? e.message : "Could not open trace file.");
     }
   };
 
@@ -308,8 +308,8 @@ export function LensDesigner() {
                 onClick={() => startNew(createDesignFromTemplate(FRAME_TEMPLATES[0]))}
               />
               <DsStartCard
-                title="Open OMA trace"
-                desc="Convert a tracer file into editable Bezier anchors. Drill records preserved."
+                title="Open trace file"
+                desc="Convert a trace file into editable Bezier anchors. Drill records preserved."
                 meta={["Auto-simplify", "Reference layer kept"]}
                 icon={<FileUp size={26} />}
                 footer={<span style={{ fontSize: 11, color: DT.subtle }}>Accepts .oma / .vca files</span>}

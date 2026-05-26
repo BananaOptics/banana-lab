@@ -545,7 +545,7 @@ export function App() {
       setWorkflow("editor");
     } catch (openError) {
       const message = messageFromError(openError);
-      setError({ title: "Could not open OMA", message });
+      setError({ title: "Could not open trace file", message });
       setStatusText(message);
     } finally {
       setBusy(false);
@@ -599,8 +599,8 @@ export function App() {
     if (!file) return;
 
     if (!file.name.toLowerCase().endsWith(".oma") && !file.name.toLowerCase().endsWith(".vca")) {
-      const message = "Drop an .oma or .vca file to open it.";
-      setError({ title: "Could not open OMA", message });
+      const message = "Drop an .oma or .vca trace file to open it.";
+      setError({ title: "Could not open trace file", message });
       setStatusText(message);
       return;
     }
@@ -757,7 +757,7 @@ export function App() {
                 disabled={busy}
               >
                 <FileUp className="h-4 w-4" />
-                Open OMA
+                Open trace file
               </Button>
             )}
             {trace && workflow === "capture" && (
@@ -909,7 +909,7 @@ export function App() {
                 <CardHeader className="sm:min-h-[96px]">
                   <CardTitle>From file</CardTitle>
                   <CardDescription>
-                    Open or drop an existing OMA file and continue editing it.
+                    Open or drop a trace file (.oma / .vca) to continue editing.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col">
@@ -929,7 +929,7 @@ export function App() {
                       onClick={openOmaFilePicker}
                       disabled={busy}
                     >
-                      Open OMA
+                      Open trace file
                     </Button>
                   </div>
                 </CardContent>
@@ -982,14 +982,14 @@ export function App() {
                               spellCheck={false}
                             />
                             <span className="flex shrink-0 items-center border-l bg-muted px-3 font-mono text-xs text-muted-foreground">
-                              .oma
+                              .oma / .vca
                             </span>
                           </div>
                         </div>
 
                         <div className="space-y-2">
                           <div className="text-xs font-medium text-muted-foreground">
-                            OMA points
+                            Trace points
                           </div>
                           <label className="flex items-center gap-2 text-sm">
                             <input
