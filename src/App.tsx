@@ -1659,7 +1659,7 @@ function SettingsDialog({
       <div className="w-full max-w-md rounded-lg border bg-card text-card-foreground shadow-2xl">
         <div className="flex items-center justify-between border-b px-5 py-4">
           <h2 id="settings-title" className="text-sm font-semibold">
-            Settings
+            Settings <span className="font-normal text-muted-foreground">v{__APP_VERSION__}</span>
           </h2>
           <button
             type="button"
@@ -1732,11 +1732,6 @@ function SettingsDialog({
               </div>
             </div>
           </div>
-        </div>
-        <div className="flex justify-end border-t px-5 py-4">
-          <Button type="button" onClick={onClose}>
-            Close
-          </Button>
         </div>
       </div>
     </div>

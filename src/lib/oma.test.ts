@@ -113,6 +113,80 @@ describe("parseOmaContent", () => {
     expect(parsed.warnings).toEqual([]);
   });
 
+  it("concatenates multi-line R= records (e.g. 5000-point OMA files)", () => {
+    const radii = Array.from({ length: 500 }, (_, i) => 2000 + i);
+    // Split into lines of 10 values each, like real OMA files
+    const rLines: string[] = [];
+    for (let i = 0; i < radii.length; i += 10) {
+      rLines.push(`R=${radii.slice(i, i + 10).join(";")}`);
+    }
+    const oma = [
+      "JOB=multiline-test",
+      "REQ=TRC",
+      "DBL=18.00",
+      "TRCFMT=1;500;E;R;P",
+      ...rLines,
+      "",
+    ].join("\r\n");
+
+    const parsed = parseOmaContent(oma, "multiline.oma");
+
+    expect(parsed.trace.radii1000).toHaveLength(1000);
+    expect(parsed.trace.radii400).toHaveLength(400);
+    // Verify all 500 source points were captured
+    expect(parsed.trace.stats.hboxMm).toBeGreaterThan(0);
+  });
+
+  it("concatenates multi-line L= records for left-eye files", () => {
+    const radii = Array.from({ length: 100 }, (_, i) => 2200 + i);
+    const lLines: string[] = [];
+    for (let i = 0; i < radii.length; i += 10) {
+      lLines.push(`L=${radii.slice(i, i + 10).join(";")}`);
+    }
+    const oma = [
+      "JOB=left-multiline",
+      "REQ=TRC",
+      "TRCFMT=1;100;E;R;P",
+      ...lLines,
+      "",
+    ].join("\r\n");
+
+    const parsed = parseOmaContent(oma, "left-multi.oma");
+
+    expect(parsed.trace.metadata.side).toBe("L");
+    expect(parsed.trace.radii1000).toHaveLength(1000);
+  });
+
+  it("separates R and L eye data from dual-TRCFMT files using R= for both eyes", () => {
+    const rRadii = Array.from({ length: 100 }, (_, i) => 2200 + i);
+    const lRadii = Array.from({ length: 100 }, (_, i) => 2100 + i);
+    const rLines: string[] = [];
+    const lLines: string[] = [];
+    for (let i = 0; i < 100; i += 10) {
+      rLines.push(`R=${rRadii.slice(i, i + 10).join(";")}`);
+      lLines.push(`R=${lRadii.slice(i, i + 10).join(";")}`);
+    }
+    const oma = [
+      "REQ=FRM",
+      "DBL=18",
+      "TRCFMT=1;100;E;R;P",
+      ...rLines,
+      "TRCFMT=1;100;E;L;P",
+      ...lLines,
+      "",
+    ].join("\r\n");
+
+    const parsed = parseOmaContent(oma, "dual-trcfmt.oma");
+
+    // Right eye radii should NOT include left eye data
+    expect(parsed.trace.radii1000).toHaveLength(1000);
+    // The stats should reflect the right eye shape, not a garbled mix
+    // Max radius in right eye is 2299, in left eye is 2199
+    expect(parsed.trace.stats.hboxMm).toBeGreaterThan(43);
+    // Should detect independent R/L traces and warn
+    expect(parsed.warnings.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("strips legacy point-count suffixes when deriving a job from filename", () => {
     const radii = Array.from({ length: 32 }, () => 2200).join(";");
     const parsed = parseOmaContent(

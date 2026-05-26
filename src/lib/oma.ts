@@ -69,7 +69,26 @@ export function parseOmaContent(content: string, fileName: string): ParsedOmaDoc
 
   const firstValue = (key: string) =>
     records.find((record) => record.key === key)?.value ?? "";
-  const radiiRecord = firstValue("R") || firstValue("L");
+
+  // Walk records in order, using TRCFMT eye field (index 3: "R" or "L") to
+  // assign R= lines to the correct eye.  Some OMA files use two TRCFMT
+  // sections (one per eye) where both sections use R= for data.
+  const rightParts: string[] = [];
+  const leftParts: string[] = [];
+  let currentEye: "R" | "L" = "R";
+  for (const record of records) {
+    if (record.key === "TRCFMT") {
+      const eyeField = record.value.split(";")[3];
+      currentEye = eyeField === "L" ? "L" : "R";
+    } else if (record.key === "R") {
+      (currentEye === "L" ? leftParts : rightParts).push(record.value);
+    } else if (record.key === "L") {
+      leftParts.push(record.value);
+    }
+  }
+  const rightRadiiStr = rightParts.join(";");
+  const leftRadiiStr = leftParts.join(";");
+  const radiiRecord = rightRadiiStr || leftRadiiStr;
 
   if (!radiiRecord) {
     throw new Error("The OMA file does not contain an R= or L= trace record.");
@@ -88,8 +107,8 @@ export function parseOmaContent(content: string, fileName: string): ParsedOmaDoc
   const dblMm = parseOptionalNumber(firstValue("DBL")) ?? 0;
   const fcrv = parseOptionalNumber(firstValue("FCRV")) ?? 0;
   const warnings: string[] = [];
-  const right = parseMaybeRadii(firstValue("R"));
-  const left = parseMaybeRadii(firstValue("L"));
+  const right = parseMaybeRadii(rightRadiiStr);
+  const left = parseMaybeRadii(leftRadiiStr);
   const side = left && !right ? "L" : dblMm > 0 ? "B" : "R";
 
   if (right && left && !radiiAreMirrored(right, left)) {
