@@ -88,6 +88,11 @@ and signal overrides belong in support or diagnostics mode, not the normal
 optician workflow. Any override used for a capture must be persisted in the
 session evidence.
 
+The current diagnostics mode is enabled with the `tracerDiagnostics` URL query
+parameter. It exposes serial overrides, transcript replay from
+`communication.ndjson`, and the local OMA simulator without adding those
+controls to the normal operator flow.
+
 ## Driver Architecture
 
 Drivers should depend on a transport interface, not directly on the browser
@@ -126,6 +131,11 @@ Simulator coverage gives migration confidence. Real session transcripts and
 hardware checks give model compatibility confidence. A device is not `Tested`
 only because it maps to the OMA serial driver.
 
+The first serial OMA decoder negotiates textual equi-angle `TRCFMT=1` trace
+records because those normalize directly into the app trace pipeline. Packed,
+delta, and other binary OMA trace payload variants must fail with session
+evidence until a browser decoder for those formats is added.
+
 ## Evidence Storage
 
 Use private object-storage artifacts first. A database index can be layered on
@@ -140,7 +150,7 @@ tracer-sessions/
       DD/
         <session-id>/
           manifest.json
-          communication.ndjson.gz
+          communication.ndjson
           raw-payload.bin
           trace.oma
 ```
@@ -149,7 +159,7 @@ Artifacts are present when available:
 
 - `manifest.json`: selected manufacturer/model, internal profile, transport,
   settings, app and driver versions, timestamps, and outcome.
-- `communication.ndjson.gz`: machine-readable RX/TX transcript and protocol
+- `communication.ndjson`: machine-readable RX/TX transcript and protocol
   event stream used for support and replay.
 - `raw-payload.bin`: exact bytes handed to the decoder or parser.
 - `trace.oma` or equivalent trace artifact: the generated or received
@@ -193,6 +203,11 @@ version.
   object uploads.
 - Add an object-storage retention policy once the support value and compliance
   lifetime of session evidence are decided.
+
+The repository includes the first AWS upload path under
+`infra/tracer-evidence-signer/`: a private S3 bucket, lifecycle expiry rule,
+direct browser `PUT` CORS, and a narrow presigned upload Lambda/API for the app
+`VITE_TRACER_EVIDENCE_SIGNER_URL` setting.
 
 ## Deferred Work
 

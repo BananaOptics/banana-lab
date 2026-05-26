@@ -13,14 +13,14 @@ export interface NidekMetadata {
   frameType: NidekFrameType;
   side: NidekSide;
   encoding: "native" | "headerless-rimless";
-  // Byte 3 ÷ 10: used as frame base curve. WinOnline maps it to a VCA attribute
-  // the same way, but the field name is obfuscated — "fcrv" is our best guess.
+  // Byte 3 / 10: used as frame base curve by the reference decoder.
+  // The field name is not exposed there, so "fcrv" is our best guess.
   fcrv: number;
   centerDistanceMm: number;
   dblMm: number;
-  // Byte 2 raw value. WinOnline maps it to a VCA attribute ÷ 10 (same pattern as
-  // byte 3). Purpose not confirmed — possibly frame box width in mm. Exposed here
-  // so real traces can be used to reverse-engineer the meaning.
+  // Byte 2 raw value. The reference decoder maps it to a VCA attribute / 10
+  // with the same pattern as byte 3. Purpose not confirmed, possibly frame box
+  // width in mm. Exposed here so real traces can confirm the meaning.
   byte2Raw: number;
 }
 

@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Private tracer evidence storage and presigned browser upload API.
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Description: Exact app origin allowed to request upload URLs.
+  EvidenceRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: Days before stored tracer evidence expires.
+
+Resources:
+  TracerEvidenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTracerEvidence
+            Status: Enabled
+            ExpirationInDays: !Ref EvidenceRetentionDays
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - content-type
+            AllowedMethods:
+              - PUT
+            AllowedOrigins:
+              - !Ref AllowedOrigin
+            MaxAge: 300
+
+  TracerEvidenceApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - OPTIONS
+          - POST
+        AllowOrigins:
+          - !Ref AllowedOrigin
+
+  TracerEvidenceSigner:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: handler.handler
+      CodeUri: .
+      Timeout: 5
+      MemorySize: 256
+      Environment:
+        Variables:
+          ALLOWED_ORIGIN: !Ref AllowedOrigin
+          TRACER_EVIDENCE_BUCKET: !Ref TracerEvidenceBucket
+          UPLOAD_URL_TTL_SECONDS: 300
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref TracerEvidenceBucket
+      Events:
+        UploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref TracerEvidenceApi
+            Method: POST
+            Path: /tracer-evidence/upload-url
+
+Outputs:
+  EvidenceBucket:
+    Value: !Ref TracerEvidenceBucket
+  SignerUrl:
+    Value: !Sub "https://${TracerEvidenceApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/tracer-evidence/upload-url"

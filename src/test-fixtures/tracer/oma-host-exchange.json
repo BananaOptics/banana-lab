@@ -1,0 +1,7 @@
+{
+  "initStatusFrame": "\u001cANS=INI\r\nSTATUS=0\r\n\u001eCRC=57654\r\n\u001d",
+  "initFormatFrame": "\u001cANS=INI\r\nSTATUS=0\r\nDEV=fixture-device\r\nDEF=fixture-definition;8888\r\nTRCFMT=1;600;E;R\r\nZFMT=1;400;E;R\r\n\u001eCRC=26807\r\n\u001d",
+  "decimal5InitFrame": "\u001cANS=INI\r\nSTATUS=0\r\nDEV=d24\r\nDEF=x;8888\r\nTRCFMT=1;400;E;R\r\n\u001eCRC=00557\r\n\u001d",
+  "traceSetupFrame": "\u001cANS=TRC\r\nJOB=fixture\r\nSTATUS=0\r\nTRCFMT=1;600;E;R\r\nZFMT=1;400;E;R\r\n\u001eCRC=9133\r\n\u001d",
+  "traceReceiptFrame": "\u001cANS=TRC\r\nJOB=fixture\r\nSTATUS=0\r\n\u001eCRC=31580\r\n\u001d"
+}

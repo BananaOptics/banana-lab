@@ -6,6 +6,26 @@ export interface SerialLogEntry {
   bytes?: Uint8Array;
 }
 
+export interface WebSerialSettings {
+  baudRate: number;
+  dataBits: 7 | 8;
+  parity: "none" | "even" | "odd";
+  stopBits: 1 | 2;
+  flowControl: "none" | "hardware";
+  dataTerminalReady?: boolean;
+  requestToSend?: boolean;
+}
+
+export const DEFAULT_WEB_SERIAL_SETTINGS: WebSerialSettings = {
+  baudRate: 9600,
+  dataBits: 8,
+  parity: "none",
+  stopBits: 1,
+  flowControl: "none",
+  dataTerminalReady: true,
+  requestToSend: true,
+};
+
 type QueueWaiter = () => void;
 
 export class ByteQueue {
@@ -86,7 +106,7 @@ export class ByteQueue {
         cleanup();
         resolve(true);
       };
-      const timer = window.setTimeout(() => {
+      const timer = globalThis.setTimeout(() => {
         cleanup();
         resolve(false);
       }, timeoutMs);
@@ -95,7 +115,7 @@ export class ByteQueue {
         resolve(false);
       };
       const cleanup = () => {
-        window.clearTimeout(timer);
+        globalThis.clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         this.waiters = this.waiters.filter((waiter) => waiter !== onData);
       };
@@ -154,34 +174,28 @@ export class WebSerialTransport {
     return this.port?.getInfo() ?? null;
   }
 
-  async requestAndOpen() {
+  async requestAndOpen(settings: WebSerialSettings = DEFAULT_WEB_SERIAL_SETTINGS) {
     if (!navigator.serial) throw new Error("Web Serial is not available in this browser.");
     await WebSerialTransport.closeGrantedPorts(this.onLog);
     const port = await navigator.serial.requestPort();
     try {
-      await this.open(port);
+      await this.open(port, settings);
     } catch (error) {
       await port.close().catch(() => undefined);
       throw new Error(toUserSerialError(error));
     }
   }
 
-  async open(port: SerialPort) {
+  async open(port: SerialPort, settings: WebSerialSettings = DEFAULT_WEB_SERIAL_SETTINGS) {
     let opened = false;
 
     try {
-      await port.open({
-        baudRate: 9600,
-        dataBits: 8,
-        parity: "none",
-        stopBits: 1,
-        flowControl: "none",
-      });
+      await port.open(settings);
       opened = true;
 
       await port.setSignals({
-        dataTerminalReady: true,
-        requestToSend: true,
+        dataTerminalReady: settings.dataTerminalReady ?? true,
+        requestToSend: settings.requestToSend ?? true,
       });
 
       if (!port.readable || !port.writable) {
@@ -192,7 +206,10 @@ export class WebSerialTransport {
       this.closing = false;
       this.reader = port.readable.getReader();
       this.writer = port.writable.getWriter();
-      this.log({ level: "info", message: "Serial port opened at 9600 8N1; DTR and RTS asserted." });
+      this.log({
+        level: "info",
+        message: `Serial port opened at ${settings.baudRate} ${settings.dataBits}${serialParityLabel(settings.parity)}${settings.stopBits}; DTR and RTS ${settings.dataTerminalReady === false || settings.requestToSend === false ? "configured" : "asserted"}.`,
+      });
       this.readLoopDone = this.readLoop();
     } catch (error) {
       if (opened) await port.close().catch(() => undefined);
@@ -279,4 +296,10 @@ function toUserSerialError(error: unknown) {
   }
 
   return message;
+}
+
+function serialParityLabel(parity: WebSerialSettings["parity"]) {
+  if (parity === "even") return "E";
+  if (parity === "odd") return "O";
+  return "N";
 }

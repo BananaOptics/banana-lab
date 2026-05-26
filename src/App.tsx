@@ -40,7 +40,6 @@ import { TracePreview } from "@/components/TracePreview";
 import {
   readLt900Trace,
   type Lt900Event,
-  type Lt900Phase,
 } from "@/lib/lt900-protocol";
 import type { DecodedNidekTrace } from "@/lib/nidek-native";
 import {
@@ -65,8 +64,33 @@ import {
 import { cn } from "@/lib/utils";
 import {
   type SerialLogEntry,
+  type WebSerialSettings,
   WebSerialTransport,
 } from "@/lib/web-serial-transport";
+import {
+  getTracerProfile,
+  groupTracerProfiles,
+  isRunnableProfile,
+  tracerProfileLabel,
+  type TracerProfile,
+} from "@/lib/tracer-catalog";
+import {
+  createTracerEvidenceId,
+  recordTracerDemand,
+  uploadTracerSessionBundle,
+} from "@/lib/tracer-evidence";
+import { readOmaSerialTrace } from "@/lib/oma-serial-protocol";
+import { OmaSimulatorTransport } from "@/lib/oma-simulator";
+import {
+  parseTracerTranscriptNdjson,
+  ReplayTransport,
+} from "@/lib/tracer-replay";
+import { TracerTranscriptRecorder } from "@/lib/tracer-transcript";
+import type {
+  TracerByteTransport,
+  TracerPhase,
+  TracerProtocolEvent,
+} from "@/lib/tracer-transport";
 import bananaLabLogoUrl from "@/assets/banana-lab-logo.png";
 
 interface UiLogEntry {
@@ -80,9 +104,11 @@ interface AppError {
   message: string;
 }
 
-const phaseLabels: Record<Lt900Phase, string> = {
+const phaseLabels: Record<TracerPhase, string> = {
   idle: "Idle",
+  listen: "Listen",
   handshake: "Handshake",
+  negotiate: "Negotiate",
   status: "Status",
   capture: "Capture",
   decode: "Decode",
@@ -90,13 +116,12 @@ const phaseLabels: Record<Lt900Phase, string> = {
   error: "Error",
 };
 
-const TRACER_MODELS = [
-  { value: "nidek-lt900-std", label: "Nidek LT-900 STD" },
-] as const;
-type TracerModel = (typeof TRACER_MODELS)[number]["value"];
+const TRACER_PROFILE_GROUPS = groupTracerProfiles();
+type TracerProfileId = TracerProfile["id"];
 
 const PXPERMM_KEY = "frame-tracer-px-per-mm";
 const THEME_KEY = "frame-tracer-theme";
+const TRACER_DIAGNOSTICS_PARAM = "tracerDiagnostics";
 const CAL_REF_PX = 200;
 const THEME_OPTIONS = [
   { value: "light", label: "Light" },
@@ -127,11 +152,18 @@ export function App() {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     return theme === "dark" || (theme === "system" && media.matches);
   });
-  const [tracerModel, setTracerModel] =
-    useState<TracerModel>("nidek-lt900-std");
+  const [tracerProfileId, setTracerProfileId] =
+    useState<TracerProfileId>("nidek-lt900-std");
+  const tracerProfile = getTracerProfile(tracerProfileId);
+  const [tracerDiagnosticsEnabled] = useState(() =>
+    new URLSearchParams(window.location.search).has(TRACER_DIAGNOSTICS_PARAM),
+  );
+  const [diagnosticSerialSettings, setDiagnosticSerialSettings] =
+    useState<WebSerialSettings | null>(null);
+  const serialSettings = diagnosticSerialSettings ?? tracerProfile.serial ?? null;
   const [connected, setConnected] = useState(false);
   const [portInfo, setPortInfo] = useState<string | null>(null);
-  const [phase, setPhase] = useState<Lt900Phase>("idle");
+  const [phase, setPhase] = useState<TracerPhase>("idle");
   const [progress, setProgress] = useState(0);
   const [statusText, setStatusText] = useState("");
   const [logs, setLogs] = useState<UiLogEntry[]>([]);
@@ -213,6 +245,10 @@ export function App() {
   const [downloadPointCount, setDownloadPointCount] = useState<400 | 1000>(400);
   const [frameDetailsExpanded, setFrameDetailsExpanded] = useState(false);
   const transportRef = useRef<WebSerialTransport | null>(null);
+  const liveSerialSettingsRef = useRef<WebSerialSettings | null>(null);
+  const transcriptRef = useRef<TracerTranscriptRecorder | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const sessionRecordedRef = useRef(false);
   const traceCancelRef = useRef<AbortController | null>(null);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -336,6 +372,7 @@ export function App() {
   };
 
   const handleSerialLog = (entry: SerialLogEntry) => {
+    transcriptRef.current?.recordSerial(entry);
     if (entry.level === "rx" || entry.level === "tx") {
       addLog({
         level: entry.level,
@@ -346,24 +383,47 @@ export function App() {
     addLog({ level: entry.level, message: entry.message });
   };
 
+  const logEvidenceUploadFailure = (uploadError: unknown) => {
+    console.warn("Tracer evidence upload failed.", uploadError);
+  };
+
   const connect = async () => {
-    if (!serialSupported) return;
+    if (!serialSupported || !isRunnableProfile(tracerProfile) || !serialSettings) return;
     setError(null);
     setBusy(true);
+    const transcript = new TracerTranscriptRecorder();
+    transcriptRef.current = transcript;
+    sessionIdRef.current = createTracerEvidenceId();
+    sessionRecordedRef.current = false;
+    liveSerialSettingsRef.current = serialSettings;
     try {
       const transport = new WebSerialTransport(handleSerialLog);
-      await transport.requestAndOpen();
+      await transport.requestAndOpen(serialSettings);
       transportRef.current = transport;
       setConnected(true);
       setPhase("idle");
       setProgress(0);
-      setStatusText("Serial port connected. Ready to start a trace.");
+      setStatusText(`${tracerProfileLabel(tracerProfile)} connected. Ready to start a trace.`);
       setPortInfo(formatPortInfo(transport.getPortInfo()));
     } catch (connectError) {
       const message = messageFromError(connectError);
       setError({ title: "Connection failed", message });
       setStatusText(message);
       addLog({ level: "error", message });
+      void uploadTracerSessionBundle({
+        profile: tracerProfile,
+        transcript,
+        serialSettings,
+        outcome: {
+          sessionId: sessionIdRef.current,
+          startedAt: transcript.startedAt,
+          finishedAt: new Date().toISOString(),
+          status: "failed",
+          phase: "connect",
+          error: message,
+        },
+      }).catch(logEvidenceUploadFailure);
+      sessionRecordedRef.current = true;
     } finally {
       setBusy(false);
     }
@@ -376,6 +436,8 @@ export function App() {
     try {
       await transportRef.current?.close();
       transportRef.current = null;
+      recordConnectionOnlySession("release-ports");
+      liveSerialSettingsRef.current = null;
       await WebSerialTransport.closeGrantedPorts(handleSerialLog);
       setConnected(false);
       setPhase("idle");
@@ -396,6 +458,8 @@ export function App() {
     try {
       await transportRef.current?.close();
       transportRef.current = null;
+      recordConnectionOnlySession("disconnect");
+      liveSerialSettingsRef.current = null;
       setConnected(false);
       setPhase("idle");
       setProgress(0);
@@ -415,9 +479,107 @@ export function App() {
     traceCancelRef.current?.abort();
   };
 
+  const recordConnectionOnlySession = (phaseName: string) => {
+    const transcript = transcriptRef.current;
+    const sessionId = sessionIdRef.current;
+    if (!transcript || !sessionId || sessionRecordedRef.current) return;
+
+    sessionRecordedRef.current = true;
+    void uploadTracerSessionBundle({
+      profile: tracerProfile,
+      transcript,
+      serialSettings: liveSerialSettingsRef.current ?? serialSettings ?? undefined,
+      outcome: {
+        sessionId,
+        startedAt: transcript.startedAt,
+        finishedAt: new Date().toISOString(),
+        status: "cancelled",
+        phase: phaseName,
+      },
+    }).catch(logEvidenceUploadFailure);
+  };
+
+  const readTraceFromTransport = (
+    transport: TracerByteTransport,
+    profile: TracerProfile,
+    controller: AbortController,
+    onEvent: (event: Lt900Event | TracerProtocolEvent) => void,
+    omaTimeoutMs?: number,
+  ) =>
+    profile.driver === "oma-serial"
+      ? readOmaSerialTrace(transport, {
+          deviceLabel: tracerProfileLabel(profile),
+          onEvent,
+          signal: controller.signal,
+          timeoutMs: omaTimeoutMs,
+        })
+      : readLt900Trace(transport, {
+          onEvent,
+          signal: controller.signal,
+        });
+
+  const applyTraceReadResult = (
+    result:
+      | Awaited<ReturnType<typeof readOmaSerialTrace>>
+      | Awaited<ReturnType<typeof readLt900Trace>>,
+    label?: string,
+  ) => {
+    const t = result.trace;
+    console.group(`Trace - side=${t.metadata.side}`);
+    console.log("side", t.metadata.side);
+    console.log("encoding", t.metadata.encoding);
+    console.log("fcrv", t.metadata.fcrv);
+    console.log("centerDistanceMm", t.metadata.centerDistanceMm);
+    console.log("dblMm", t.metadata.dblMm);
+    console.log("hboxMm", t.stats.hboxMm);
+    console.log("vboxMm", t.stats.vboxMm);
+    console.log("circMm", t.stats.circMm);
+    console.log("pointCount", t.stats.pointCount);
+    console.log("radii1000", t.radii1000);
+    console.log("radii400", t.radii400);
+    console.log(
+      "cleanFrame (hex)",
+      Array.from(t.cleanFrame)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(" "),
+    );
+    console.groupEnd();
+    if (t.metadata.encoding === "headerless-rimless") {
+      addLog({
+        level: "info",
+        message: `Rimless decode: cleanHead=${formatByteHead(t.cleanFrame, 48)} minR=${t.stats.minRadius} maxR=${t.stats.maxRadius} HBOX=${t.stats.hboxMm} VBOX=${t.stats.vboxMm} CIRC=${t.stats.circMm}`,
+      });
+    }
+
+    const nextJobName = freshJobName();
+    const rawPayload = "rawPayload" in result ? result.rawPayload : result.rawFrame;
+    const traceArtifact =
+      "traceArtifact" in result
+        ? result.traceArtifact
+        : buildOmaFiles(result.trace, {
+            ...jobInfo,
+            job: nextJobName,
+            ven: jobInfo.ven || "Nidek",
+            model: jobInfo.model || "LT-900",
+          })[0];
+
+    setJobInfo((prev) => ({ ...prev, job: nextJobName }));
+    setEditableDblFromTrace(result.trace);
+    setTrace(result.trace);
+    setShowAsPair(result.trace.metadata.side !== "B");
+    setDocumentSource({ type: "tracer", label });
+    setWorkflow("editor");
+
+    return { rawPayload, traceArtifact };
+  };
+
   const startTrace = async () => {
     const transport = transportRef.current;
     if (!transport) return;
+    const transcript = transcriptRef.current ?? new TracerTranscriptRecorder();
+    transcriptRef.current = transcript;
+    const sessionId = sessionIdRef.current ?? createTracerEvidenceId();
+    sessionIdRef.current = sessionId;
     const controller = new AbortController();
     traceCancelRef.current = controller;
     setBusy(true);
@@ -428,53 +590,105 @@ export function App() {
     setDocumentSource({ type: "none" });
     setOmaWarnings([]);
     setProgress(0);
-    setPhase("handshake");
+    setPhase(tracerProfile.driver === "oma-serial" ? "listen" : "handshake");
     setStatusText("Starting trace read sequence.");
+    let rawPayload: Uint8Array | undefined;
+    let traceArtifact: OmaFile | undefined;
+    let sessionStatus: "success" | "failed" | "cancelled" = "failed";
+    let sessionError: string | undefined;
+    let sessionPhase: TracerPhase =
+      tracerProfile.driver === "oma-serial" ? "listen" : "handshake";
+    const handleSessionProtocolEvent = (event: Lt900Event | TracerProtocolEvent) => {
+      sessionPhase = event.phase;
+      handleProtocolEvent(event);
+    };
     try {
-      const result = await readLt900Trace(transport, {
-        onEvent: (event) => handleProtocolEvent(event),
-        signal: controller.signal,
-      });
-      const t = result.trace;
-      console.group(`Trace — side=${t.metadata.side}`);
-      console.log("side", t.metadata.side);
-      console.log("encoding", t.metadata.encoding);
-      console.log("fcrv", t.metadata.fcrv);
-      console.log("centerDistanceMm", t.metadata.centerDistanceMm);
-      console.log("dblMm", t.metadata.dblMm);
-      console.log("hboxMm", t.stats.hboxMm);
-      console.log("vboxMm", t.stats.vboxMm);
-      console.log("circMm", t.stats.circMm);
-      console.log("pointCount", t.stats.pointCount);
-      console.log("radii1000", t.radii1000);
-      console.log("radii400", t.radii400);
-      console.log(
-        "cleanFrame (hex)",
-        Array.from(t.cleanFrame)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join(" "),
+      const result = await readTraceFromTransport(
+        transport,
+        tracerProfile,
+        controller,
+        handleSessionProtocolEvent,
       );
-      console.groupEnd();
-      if (t.metadata.encoding === "headerless-rimless") {
-        addLog({
-          level: "info",
-          message: `Rimless decode: cleanHead=${formatByteHead(t.cleanFrame, 48)} minR=${t.stats.minRadius} maxR=${t.stats.maxRadius} HBOX=${t.stats.hboxMm} VBOX=${t.stats.vboxMm} CIRC=${t.stats.circMm}`,
-        });
-      }
-      setJobInfo((prev) => ({ ...prev, job: freshJobName() }));
-      setEditableDblFromTrace(result.trace);
-      setTrace(result.trace);
-      setShowAsPair(result.trace.metadata.side !== "B");
-      setDocumentSource({ type: "tracer" });
-      setWorkflow("editor");
+      ({ rawPayload, traceArtifact } = applyTraceReadResult(result));
+      sessionStatus = "success";
     } catch (traceError) {
       if (traceError instanceof DOMException && traceError.name === "AbortError") {
+        sessionPhase = "idle";
         setPhase("idle");
         setProgress(0);
         setStatusText("Trace cancelled.");
+        sessionStatus = "cancelled";
       } else {
         const message = messageFromError(traceError);
+        sessionError = message;
         setError({ title: "Trace failed", message });
+        sessionPhase = "error";
+        setPhase("error");
+        setStatusText(message);
+        addLog({ level: "error", message });
+      }
+    } finally {
+      void uploadTracerSessionBundle({
+        profile: tracerProfile,
+        transcript,
+        rawPayload,
+        traceArtifact,
+        serialSettings: liveSerialSettingsRef.current ?? serialSettings ?? undefined,
+        outcome: {
+          sessionId,
+          startedAt: transcript.startedAt,
+          finishedAt: new Date().toISOString(),
+          status: sessionStatus,
+          phase: sessionPhase,
+          error: sessionError,
+        },
+      }).catch(logEvidenceUploadFailure);
+      sessionRecordedRef.current = true;
+      traceCancelRef.current = null;
+      setBusy(false);
+    }
+  };
+
+  const runDiagnosticTrace = async (
+    transport: TracerByteTransport,
+    label: string,
+    omaTimeoutMs = 2_000,
+  ) => {
+    if (!isRunnableProfile(tracerProfile)) return;
+
+    const controller = new AbortController();
+    traceCancelRef.current = controller;
+    setBusy(true);
+    setError(null);
+    setTrace(null);
+    setShowAsPair(false);
+    setDrillRecords([]);
+    setDocumentSource({ type: "none" });
+    setOmaWarnings([]);
+    setProgress(0);
+    setPhase(tracerProfile.driver === "oma-serial" ? "listen" : "handshake");
+    setStatusText(`${label} started.`);
+    try {
+      const result = await readTraceFromTransport(
+        transport,
+        tracerProfile,
+        controller,
+        handleProtocolEvent,
+        omaTimeoutMs,
+      );
+      applyTraceReadResult(result, label);
+      addLog({ level: "info", message: `${label} completed.` });
+    } catch (diagnosticError) {
+      if (
+        diagnosticError instanceof DOMException &&
+        diagnosticError.name === "AbortError"
+      ) {
+        setPhase("idle");
+        setProgress(0);
+        setStatusText(`${label} cancelled.`);
+      } else {
+        const message = messageFromError(diagnosticError);
+        setError({ title: `${label} failed`, message });
         setPhase("error");
         setStatusText(message);
         addLog({ level: "error", message });
@@ -483,6 +697,29 @@ export function App() {
       traceCancelRef.current = null;
       setBusy(false);
     }
+  };
+
+  const replayTranscriptFile = async (file: File) => {
+    try {
+      const entries = parseTracerTranscriptNdjson(await file.text());
+      await runDiagnosticTrace(
+        new ReplayTransport(entries),
+        `Transcript replay: ${file.name}`,
+      );
+    } catch (replayError) {
+      const message = messageFromError(replayError);
+      setError({ title: "Transcript replay failed", message });
+      setPhase("error");
+      setStatusText(message);
+      addLog({ level: "error", message });
+    }
+  };
+
+  const runOmaSimulator = async () => {
+    await runDiagnosticTrace(
+      new OmaSimulatorTransport({ scenario: "fragmented" }),
+      "OMA simulator",
+    );
   };
 
   const runSimulatedTrace = () => {
@@ -608,7 +845,8 @@ export function App() {
     await openOmaFile(file);
   };
 
-  const handleProtocolEvent = (event: Lt900Event) => {
+  const handleProtocolEvent = (event: Lt900Event | TracerProtocolEvent) => {
+    transcriptRef.current?.recordProtocol(event);
     setPhase(event.phase);
     setStatusText(event.message);
     setProgress((current) => event.progress ?? current);
@@ -616,6 +854,15 @@ export function App() {
       level: event.level ?? "info",
       message: `${phaseLabels[event.phase]}: ${event.message}`,
     });
+  };
+
+  const changeTracerProfile = (profileId: TracerProfileId) => {
+    setTracerProfileId(profileId);
+    setDiagnosticSerialSettings(null);
+    const profile = getTracerProfile(profileId);
+    if (!isRunnableProfile(profile)) {
+      void recordTracerDemand(profile).catch(logEvidenceUploadFailure);
+    }
   };
 
   const downloadOma = (file: OmaFile) => {
@@ -712,22 +959,18 @@ export function App() {
                     htmlFor="tracer-model"
                     className="text-xs font-medium text-muted-foreground whitespace-nowrap"
                   >
-                    Tracer model
+                    Tracer
                   </label>
                   <select
                     id="tracer-model"
-                    value={tracerModel}
+                    value={tracerProfileId}
                     onChange={(e) =>
-                      setTracerModel(e.target.value as TracerModel)
+                      changeTracerProfile(e.target.value as TracerProfileId)
                     }
                     disabled={connected}
                     className="rounded-md border bg-background px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {TRACER_MODELS.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
-                      </option>
-                    ))}
+                    <TracerProfileOptions />
                   </select>
                 </div>
               </div>
@@ -1313,7 +1556,7 @@ export function App() {
 
       {captureDialogOpen && (
         <CaptureDialog
-          tracerModel={tracerModel}
+          tracerProfile={tracerProfile}
           connected={connected}
           serialSupported={serialSupported}
           busy={busy}
@@ -1324,10 +1567,16 @@ export function App() {
           portInfo={portInfo}
           logs={logs}
           logEndRef={logEndRef}
-          onTracerModelChange={setTracerModel}
+          tracerDiagnosticsEnabled={tracerDiagnosticsEnabled}
+          serialSettings={serialSettings}
+          onTracerProfileChange={changeTracerProfile}
+          onSerialSettingsChange={setDiagnosticSerialSettings}
+          onSerialSettingsReset={() => setDiagnosticSerialSettings(null)}
           onConnect={connect}
           onDisconnect={disconnect}
           onReadTrace={startTrace}
+          onReplayTranscriptFile={replayTranscriptFile}
+          onRunOmaSimulator={runOmaSimulator}
           onCancel={cancelTrace}
           onReleasePorts={releasePorts}
           onClearLogs={() => setLogs([])}
@@ -1362,7 +1611,7 @@ export function App() {
 }
 
 function CaptureDialog({
-  tracerModel,
+  tracerProfile,
   connected,
   serialSupported,
   busy,
@@ -1373,30 +1622,42 @@ function CaptureDialog({
   portInfo,
   logs,
   logEndRef,
-  onTracerModelChange,
+  tracerDiagnosticsEnabled,
+  serialSettings,
+  onTracerProfileChange,
+  onSerialSettingsChange,
+  onSerialSettingsReset,
   onConnect,
   onDisconnect,
   onReadTrace,
+  onReplayTranscriptFile,
+  onRunOmaSimulator,
   onCancel,
   onReleasePorts,
   onClearLogs,
   onClose,
 }: {
-  tracerModel: TracerModel;
+  tracerProfile: TracerProfile;
   connected: boolean;
   serialSupported: boolean;
   busy: boolean;
   error: AppError | null;
-  phase: Lt900Phase;
+  phase: TracerPhase;
   progress: number;
   statusText: string;
   portInfo: string | null;
   logs: UiLogEntry[];
   logEndRef: RefObject<HTMLDivElement>;
-  onTracerModelChange: (value: TracerModel) => void;
+  tracerDiagnosticsEnabled: boolean;
+  serialSettings: WebSerialSettings | null;
+  onTracerProfileChange: (value: TracerProfileId) => void;
+  onSerialSettingsChange: (value: WebSerialSettings) => void;
+  onSerialSettingsReset: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onReadTrace: () => void;
+  onReplayTranscriptFile: (file: File) => Promise<void>;
+  onRunOmaSimulator: () => Promise<void>;
   onCancel: () => void;
   onReleasePorts: () => void;
   onClearLogs: () => void;
@@ -1404,6 +1665,7 @@ function CaptureDialog({
 }) {
   const isActive =
     phase !== "idle" && phase !== "complete" && phase !== "error";
+  const runnable = isRunnableProfile(tracerProfile);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1465,27 +1727,20 @@ function CaptureDialog({
           )}
 
           <div className="space-y-1.5">
-            <label
-              htmlFor="dialog-tracer-model"
-              className="text-sm font-medium"
-            >
-              Tracer model
+            <label htmlFor="dialog-tracer-model" className="text-sm font-medium">
+              Manufacturer and model
             </label>
             <div className="relative">
               <select
                 id="dialog-tracer-model"
-                value={tracerModel}
+                value={tracerProfile.id}
                 onChange={(e) =>
-                  onTracerModelChange(e.target.value as TracerModel)
+                  onTracerProfileChange(e.target.value as TracerProfileId)
                 }
                 disabled={connected}
                 className="h-9 w-full appearance-none rounded-md border bg-background px-3 pr-9 text-sm disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {TRACER_MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
+                <TracerProfileOptions />
               </select>
               <ChevronDown
                 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -1493,6 +1748,24 @@ function CaptureDialog({
               />
             </div>
           </div>
+
+          {!runnable ? (
+            <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+              <AlertCircle className="mt-0.5 h-4 w-4" />
+              <AlertTitle className="mb-0">Not supported yet</AlertTitle>
+              <AlertDescription className="col-start-2">
+                {tracerProfileLabel(tracerProfile)} is listed for support planning, but it does not have a browser-direct capture driver yet.
+              </AlertDescription>
+            </Alert>
+          ) : tracerProfile.supportStatus === "expected" ? (
+            <Alert className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1">
+              <PlugZap className="mt-0.5 h-4 w-4" />
+              <AlertTitle className="mb-0">Expected to work</AlertTitle>
+              <AlertDescription className="col-start-2">
+                {tracerProfileLabel(tracerProfile)} uses the serial OMA capture path.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           <div className="rounded-md border bg-muted/30 p-3">
             <div className="flex items-center justify-between gap-3">
@@ -1524,7 +1797,7 @@ function CaptureDialog({
             {!connected ? (
               <Button
                 onClick={onConnect}
-                disabled={!serialSupported || busy}
+                disabled={!serialSupported || busy || !runnable}
                 className="flex-1"
               >
                 {busy ? (
@@ -1557,7 +1830,7 @@ function CaptureDialog({
             ) : (
               <Button
                 onClick={onReadTrace}
-                disabled={!connected || busy}
+                disabled={!connected || busy || !runnable}
                 className="flex-1"
               >
                 <Play className="h-4 w-4" />
@@ -1577,6 +1850,19 @@ function CaptureDialog({
               <Unplug className="h-3.5 w-3.5" />
               Release ports
             </Button>
+          )}
+
+          {tracerDiagnosticsEnabled && (
+            <TracerDiagnosticsPanel
+              tracerProfile={tracerProfile}
+              serialSettings={serialSettings}
+              connected={connected}
+              busy={busy}
+              onSerialSettingsChange={onSerialSettingsChange}
+              onSerialSettingsReset={onSerialSettingsReset}
+              onReplayTranscriptFile={onReplayTranscriptFile}
+              onRunOmaSimulator={onRunOmaSimulator}
+            />
           )}
 
           <div className="space-y-3 border-t pt-5">
@@ -1618,6 +1904,254 @@ function CaptureDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function TracerDiagnosticsPanel({
+  tracerProfile,
+  serialSettings,
+  connected,
+  busy,
+  onSerialSettingsChange,
+  onSerialSettingsReset,
+  onReplayTranscriptFile,
+  onRunOmaSimulator,
+}: {
+  tracerProfile: TracerProfile;
+  serialSettings: WebSerialSettings | null;
+  connected: boolean;
+  busy: boolean;
+  onSerialSettingsChange: (value: WebSerialSettings) => void;
+  onSerialSettingsReset: () => void;
+  onReplayTranscriptFile: (file: File) => Promise<void>;
+  onRunOmaSimulator: () => Promise<void>;
+}) {
+  const replayInputRef = useRef<HTMLInputElement>(null);
+  const updateSerialSettings = (patch: Partial<WebSerialSettings>) => {
+    if (serialSettings) onSerialSettingsChange({ ...serialSettings, ...patch });
+  };
+
+  return (
+    <div className="space-y-4 border-t pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">Tracer diagnostics</h3>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onSerialSettingsReset}
+          disabled={!serialSettings || connected || busy}
+        >
+          Reset serial
+        </Button>
+      </div>
+
+      {serialSettings && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          <DiagnosticNumberField
+            id="diag-baud"
+            label="Baud"
+            value={serialSettings.baudRate}
+            min={300}
+            step={100}
+            disabled={connected || busy}
+            onChange={(value) => updateSerialSettings({ baudRate: value })}
+          />
+          <DiagnosticSelectField
+            id="diag-parity"
+            label="Parity"
+            value={serialSettings.parity}
+            disabled={connected || busy}
+            options={["none", "even", "odd"]}
+            onChange={(value) =>
+              updateSerialSettings({
+                parity: value as WebSerialSettings["parity"],
+              })
+            }
+          />
+          <DiagnosticSelectField
+            id="diag-flow"
+            label="Flow"
+            value={serialSettings.flowControl}
+            disabled={connected || busy}
+            options={["none", "hardware"]}
+            onChange={(value) =>
+              updateSerialSettings({
+                flowControl: value as WebSerialSettings["flowControl"],
+              })
+            }
+          />
+          <DiagnosticSelectField
+            id="diag-data-bits"
+            label="Data bits"
+            value={String(serialSettings.dataBits)}
+            disabled={connected || busy}
+            options={["7", "8"]}
+            onChange={(value) =>
+              updateSerialSettings({
+                dataBits: Number(value) as WebSerialSettings["dataBits"],
+              })
+            }
+          />
+          <DiagnosticSelectField
+            id="diag-stop-bits"
+            label="Stop bits"
+            value={String(serialSettings.stopBits)}
+            disabled={connected || busy}
+            options={["1", "2"]}
+            onChange={(value) =>
+              updateSerialSettings({
+                stopBits: Number(value) as WebSerialSettings["stopBits"],
+              })
+            }
+          />
+          <div className="grid grid-cols-2 gap-2 pt-6 text-xs">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={serialSettings.dataTerminalReady ?? true}
+                onChange={(e) =>
+                  updateSerialSettings({ dataTerminalReady: e.target.checked })
+                }
+                disabled={connected || busy}
+              />
+              DTR
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={serialSettings.requestToSend ?? true}
+                onChange={(e) =>
+                  updateSerialSettings({ requestToSend: e.target.checked })
+                }
+                disabled={connected || busy}
+              />
+              RTS
+            </label>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onRunOmaSimulator}
+          disabled={busy || tracerProfile.driver !== "oma-serial"}
+          className="flex-1"
+        >
+          Run OMA simulator
+        </Button>
+        <input
+          ref={replayInputRef}
+          type="file"
+          accept=".ndjson,application/x-ndjson,application/json,text/plain"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void onReplayTranscriptFile(file);
+          }}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => replayInputRef.current?.click()}
+          disabled={busy || !isRunnableProfile(tracerProfile)}
+          className="flex-1"
+        >
+          Replay transcript
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticNumberField({
+  id,
+  label,
+  value,
+  min,
+  step,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  step: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label htmlFor={id} className="space-y-1 text-xs">
+      <span className="block text-muted-foreground">{label}</span>
+      <input
+        id={id}
+        type="number"
+        value={value}
+        min={min}
+        step={step}
+        disabled={disabled}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isFinite(next) && next >= min) onChange(next);
+        }}
+        className="h-8 w-full rounded-md border bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+      />
+    </label>
+  );
+}
+
+function DiagnosticSelectField({
+  id,
+  label,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  options: string[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label htmlFor={id} className="space-y-1 text-xs">
+      <span className="block text-muted-foreground">{label}</span>
+      <select
+        id={id}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-8 w-full rounded-md border bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function TracerProfileOptions() {
+  return (
+    <>
+      {TRACER_PROFILE_GROUPS.map(([manufacturer, profiles]) => (
+        <optgroup key={manufacturer} label={manufacturer}>
+          {profiles?.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {[profile.model, profile.variant].filter(Boolean).join(" - ")}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </>
   );
 }
 

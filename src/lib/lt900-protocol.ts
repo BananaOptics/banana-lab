@@ -10,7 +10,8 @@ import {
   traceSummary,
   type DecodedNidekTrace,
 } from "@/lib/nidek-native";
-import { hex, type SerialLogEntry, type WebSerialTransport } from "@/lib/web-serial-transport";
+import { hex, type SerialLogEntry } from "@/lib/web-serial-transport";
+import type { TracerByteTransport } from "@/lib/tracer-transport";
 
 const ACK = 0x06;
 const ENQ = 0x05;
@@ -44,7 +45,7 @@ export interface Lt900ReadResult {
 }
 
 export async function readLt900Trace(
-  transport: WebSerialTransport,
+  transport: TracerByteTransport,
   options: Lt900ReadOptions = {},
 ): Promise<Lt900ReadResult> {
   const { signal } = options;
@@ -105,19 +106,19 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException("Trace cancelled.", "AbortError");
 }
 
-async function requireAck(transport: WebSerialTransport, timeoutMs: number, label: string, signal?: AbortSignal) {
+async function requireAck(transport: TracerByteTransport, timeoutMs: number, label: string, signal?: AbortSignal) {
   const ok = await transport.queue.waitForByte(ACK, timeoutMs, signal);
   throwIfAborted(signal);
   if (!ok) throw new Error(`Timed out waiting for ACK after ${label}.`);
 }
 
-async function sendAck(transport: WebSerialTransport, label: string) {
+async function sendAck(transport: TracerByteTransport, label: string) {
   await transport.write(Uint8Array.from([ACK]));
   void label;
 }
 
 async function captureNativeFrame(
-  transport: WebSerialTransport,
+  transport: TracerByteTransport,
   emit: (event: Lt900Event) => void,
   initialFrameMarker: number | null = null,
   signal?: AbortSignal,
@@ -246,7 +247,7 @@ async function captureNativeFrame(
 }
 
 function readHeaderAfterMarker(
-  transport: WebSerialTransport,
+  transport: TracerByteTransport,
   marker: number,
   deadline: number,
   signal?: AbortSignal,
