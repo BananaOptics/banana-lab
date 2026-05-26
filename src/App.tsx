@@ -95,7 +95,8 @@ const TRACER_MODELS = [
 ] as const;
 type TracerModel = (typeof TRACER_MODELS)[number]["value"];
 
-const PXPERMM_KEY = "frame-tracer-px-per-mm";
+const CAL_MM_KEY = "frame-tracer-calibration-mm";
+const LEGACY_PXPERMM_KEY = "frame-tracer-px-per-mm";
 const THEME_KEY = "frame-tracer-theme";
 const CAL_REF_PX = 200;
 const THEME_OPTIONS = [
@@ -109,6 +110,26 @@ type DocumentSource =
   | { type: "none" }
   | { type: "tracer"; label?: string }
   | { type: "oma"; label: string };
+
+function readStoredCalibrationMm() {
+  try {
+    const storedMm = parseStoredPositiveNumber(localStorage.getItem(CAL_MM_KEY));
+    if (storedMm) return storedMm;
+
+    const legacyPxPerMm = parseStoredPositiveNumber(
+      localStorage.getItem(LEGACY_PXPERMM_KEY),
+    );
+    return legacyPxPerMm ? CAL_REF_PX / legacyPxPerMm : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredPositiveNumber(value: string | null) {
+  if (!value) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
 
 export function App() {
   const navigate = useNavigate();
@@ -150,15 +171,9 @@ export function App() {
   const [pairDblInput, setPairDblInput] = useState("18");
   const [pairDblTouched, setPairDblTouched] = useState(false);
   const [zoom, setZoom] = useState<"fit" | "1:1">("fit");
-  const [pxPerMm, setPxPerMm] = useState<number | null>(() => {
-    try {
-      const v = localStorage.getItem(PXPERMM_KEY);
-      return v ? parseFloat(v) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [calDraft, setCalDraft] = useState("");
+  const [calMm, setCalMm] = useState<number | null>(() => readStoredCalibrationMm());
+  const pxPerMm = useMemo(() => (calMm ? CAL_REF_PX / calMm : null), [calMm]);
+  const [calDraft, setCalDraft] = useState(() => (calMm ? String(calMm) : ""));
   const [jobInfo, setJobInfo] = useState<OmaJobInfo>({
     job: "",
     ven: "",
@@ -659,12 +674,13 @@ export function App() {
   };
 
   const saveCalibration = () => {
-    const mm = parseFloat(calDraft);
-    if (isNaN(mm) || mm <= 0) return;
-    const px = CAL_REF_PX / mm;
-    setPxPerMm(px);
+    const mm = Number(calDraft);
+    if (!Number.isFinite(mm) || mm <= 0) return;
+    setCalMm(mm);
+    setCalDraft(String(mm));
     try {
-      localStorage.setItem(PXPERMM_KEY, String(px));
+      localStorage.setItem(CAL_MM_KEY, String(mm));
+      localStorage.removeItem(LEGACY_PXPERMM_KEY);
     } catch {
       /* ignore */
     }
@@ -1349,6 +1365,7 @@ export function App() {
       {settingsOpen && (
         <SettingsDialog
           theme={theme}
+          calMm={calMm}
           pxPerMm={pxPerMm}
           calDraft={calDraft}
           onThemeChange={setTheme}
@@ -1623,6 +1640,7 @@ function CaptureDialog({
 
 function SettingsDialog({
   theme,
+  calMm,
   pxPerMm,
   calDraft,
   onThemeChange,
@@ -1631,6 +1649,7 @@ function SettingsDialog({
   onClose,
 }: {
   theme: ThemeMode;
+  calMm: number | null;
   pxPerMm: number | null;
   calDraft: string;
   onThemeChange: (value: ThemeMode) => void;
@@ -1684,8 +1703,8 @@ function SettingsDialog({
             <div className="mb-3">
               <div className="text-sm font-medium">Screen scale</div>
               <div className="text-xs text-muted-foreground">
-                {pxPerMm
-                  ? `Calibrated (${pxPerMm.toFixed(3)} px/mm)`
+                {calMm && pxPerMm
+                  ? `Calibrated (${calMm.toFixed(2)} mm measured, ${pxPerMm.toFixed(3)} px/mm)`
                   : "Not calibrated - 1:1 view disabled"}
               </div>
             </div>

@@ -97,17 +97,14 @@ export function DrillDialog({
   }, [onCancel]);
 
   const { lensPath, scale } = useMemo(() => {
-    // Produce left-lens points in OMA coord space (x+ = temporal, y+ = up)
-    let pts: { x: number; y: number }[];
-    if (trace.metadata.dblMm > 0) {
-      // Both lenses were stored: mirror the right-lens radii to get the left lens shape
-      pts = polarRadiiToPoints(trace.radii400).map((p) => ({ x: -p.x, y: p.y }));
-    } else if (trace.metadata.side === "R") {
-      // Right lens only: mirror to get the left lens shape
-      pts = trace.stats.points.map((p) => ({ x: -p.x, y: p.y }));
-    } else {
-      pts = trace.stats.points;
-    }
+    // Produce left-lens points with x+ = temporal, y+ = up.
+    // Negate X from source radii so the lens renders front-facing (matching
+    // the main preview) — nasal on the left, temporal on the right.
+    const rawPts =
+      trace.metadata.dblMm > 0
+        ? polarRadiiToPoints(trace.radii400)
+        : trace.stats.points;
+    const pts = rawPts.map((p) => ({ x: -p.x, y: p.y }));
 
     const xs = pts.map((p) => p.x);
     const ys = pts.map((p) => p.y);
@@ -118,7 +115,7 @@ export function DrillDialog({
     const path =
       pts
         .map((p, i) => {
-          const x = CX - p.x * s;
+          const x = CX + p.x * s;
           const y = CY - p.y * s;
           return `${i === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
         })
