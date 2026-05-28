@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Download,
+  Eye,
   FileUp,
   Loader2,
   Play,
@@ -888,7 +889,7 @@ export function App() {
 
         {!trace ? (
           <section className="flex min-h-[420px] items-center justify-center py-8">
-            <div className="grid w-full max-w-3xl gap-4 sm:grid-cols-2">
+            <div className="grid w-full max-w-3xl gap-4 sm:grid-cols-3">
               <Card className="flex h-full flex-col">
                 <CardHeader className="sm:min-h-[96px]">
                   <CardTitle>Trace form</CardTitle>
@@ -946,6 +947,26 @@ export function App() {
                       disabled={busy}
                     >
                       Open trace file
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="flex h-full flex-col">
+                <CardHeader className="sm:min-h-[96px]">
+                  <CardTitle>PD Measurement</CardTitle>
+                  <CardDescription>Measure pupillary distance with a selfie.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col">
+                  <div className="flex min-h-[210px] flex-1 flex-col items-center justify-between gap-5 p-5">
+                    <Eye
+                      className="h-[120px] w-[120px] text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <Button
+                      className="w-full"
+                      onClick={() => navigate("/pupillary-distance")}
+                    >
+                      Measure PD
                     </Button>
                   </div>
                 </CardContent>
