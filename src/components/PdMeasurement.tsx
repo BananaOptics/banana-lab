@@ -58,6 +58,7 @@ export function PdMeasurement() {
   const [step, setStep] = useState<Step>("capture");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
+  const [showCapturePrompt, setShowCapturePrompt] = useState(false);
   const cameraZoom = 2.8;
 
   // Card corners: TL, TR, BR, BL in image coordinates
@@ -148,7 +149,8 @@ export function PdMeasurement() {
 
   const capturePhoto = useCallback(() => {
     const video = videoRef.current;
-    if (!video) return;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
 
     const vw = video.videoWidth;
     const vh = video.videoHeight;
@@ -171,24 +173,44 @@ export function PdMeasurement() {
     ctx.scale(-1, 1);
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
 
+    // Compute canvas-to-image mapping using the guide rect from draw
+    const rect = canvas.getBoundingClientRect();
+    const cw = rect.width;
+    const ch = rect.height;
+    const baseScale = Math.min(cw / vw, ch / vh);
+    const s = baseScale * cameraZoom;
+    const dx = (cw - vw * s) / 2;
+    const dy = (ch - vh * s) / 2;
+    const dw = vw * s;
+
+    // Map a canvas point to captured image coords (both mirrors cancel out)
+    const mapToImage = (cx: number, cy: number): Point => {
+      const vpx = (dx + dw - cx) / s;
+      const vpy = (cy - dy) / s;
+      return { x: outW + cropX - vpx, y: vpy - cropY };
+    };
+
+    // Compute guide rect in canvas coords (same as draw code)
+    const ovalW = Math.min(cw, ch) * 0.32;
+    const ovalH = ovalW * 1.4;
+    const ovalCy = ch * 0.48;
+    const guideW = ovalW * 1.12;
+    const guideH = guideW * (53.98 / 85.6);
+    const gcx = cw / 2;
+    const gcy = ovalCy - ovalH * 0.64 + guideH / 2;
+
+    // Map guide corners to image coords for initial card placement
+    const tl = mapToImage(gcx - guideW / 2, gcy - guideH / 2);
+    const tr = mapToImage(gcx + guideW / 2, gcy - guideH / 2);
+    const br = mapToImage(gcx + guideW / 2, gcy + guideH / 2);
+    const bl = mapToImage(gcx - guideW / 2, gcy + guideH / 2);
+
     const img = new Image();
     img.onload = () => {
       imageRef.current = img;
       setImgSize({ w: img.width, h: img.height });
       stopCamera();
-
-      // Initialize card corners to a centered rectangle
-      const cx = img.width / 2;
-      const cy = img.height * 0.3;
-      const hw = img.width * 0.18;
-      const hh = hw * (53.98 / 85.6);
-      setCardCorners([
-        { x: cx - hw, y: cy - hh },
-        { x: cx + hw, y: cy - hh },
-        { x: cx + hw, y: cy + hh },
-        { x: cx - hw, y: cy + hh },
-      ]);
-
+      setCardCorners([tl, tr, br, bl]);
       setStep("card-corners");
     };
     img.src = offscreen.toDataURL("image/jpeg", 0.95);
@@ -721,15 +743,16 @@ export function PdMeasurement() {
         </span>
       </header>
 
-      {/* Hint bar */}
-      {STEP_HINTS[step] && (
-        <div className="border-b bg-muted/30 px-4 py-2 text-center text-sm text-muted-foreground">
-          {STEP_HINTS[step]}
-        </div>
-      )}
-
       {/* Canvas area */}
       <div ref={containerRef} className="relative flex-1 bg-black">
+        {/* Instruction chip overlay */}
+        {STEP_HINTS[step] && (
+          <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
+            <div className="rounded-full bg-black/60 px-4 py-1.5 text-center text-sm font-medium text-white backdrop-blur-sm">
+              {STEP_HINTS[step]}
+            </div>
+          </div>
+        )}
         {step === "capture" && cameraError && (
           <div className="absolute inset-0 flex items-center justify-center p-8">
             <div className="rounded-lg bg-card p-6 text-center text-sm text-destructive shadow-lg">
@@ -782,6 +805,7 @@ export function PdMeasurement() {
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full touch-none"
+          onContextMenu={(e) => e.preventDefault()}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
@@ -792,15 +816,17 @@ export function PdMeasurement() {
       {/* Bottom controls */}
       <footer className="flex items-center justify-between gap-3 border-t bg-background px-4 py-3" style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}>
         {step === "capture" ? (
-          <Button
-            size="lg"
-            className="rounded-full px-8"
-            onClick={capturePhoto}
-            disabled={!cameraReady}
-          >
-            <Camera className="mr-2 h-5 w-5" />
-            Capture
-          </Button>
+          <div className="flex w-full justify-center">
+            <Button
+              size="lg"
+              className="rounded-full px-8"
+              onClick={() => setShowCapturePrompt(true)}
+              disabled={!cameraReady}
+            >
+              <Camera className="mr-2 h-5 w-5" />
+              Capture
+            </Button>
+          </div>
         ) : step === "result" ? (
           <>
             <Button variant="outline" onClick={goBack}>
@@ -828,6 +854,32 @@ export function PdMeasurement() {
           </>
         )}
       </footer>
+
+      {/* "Open eyes wide" prompt before capture */}
+      {showCapturePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-6 rounded-2xl bg-card p-6 text-center shadow-2xl">
+            <p className="text-lg font-semibold">Open your eyes wide</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Look straight into the camera and open your eyes as large as possible before capturing.
+            </p>
+            <div className="mt-5 flex justify-center gap-3">
+              <Button variant="outline" onClick={() => setShowCapturePrompt(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowCapturePrompt(false);
+                  capturePhoto();
+                }}
+              >
+                <Camera className="mr-2 h-4 w-4" />
+                Capture
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
