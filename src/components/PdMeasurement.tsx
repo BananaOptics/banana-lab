@@ -28,8 +28,8 @@ const STEP_HINTS: Record<Step, string> = {
   "card-corners": "Drag the four corners to match your credit card.",
   "fine-corners": "Fine-tune each corner. Drag to adjust precisely.",
   "tap-eyes": "Tap approximately on your left eye, then right eye.",
-  "fine-left": "Drag the crosshair to the center of your left pupil.",
-  "fine-right": "Drag the crosshair to the center of your right pupil.",
+  "fine-left": "Drag the image to center your left pupil in the crosshair.",
+  "fine-right": "Drag the image to center your right pupil in the crosshair.",
   result: "",
 };
 
@@ -60,7 +60,7 @@ export function PdMeasurement() {
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraZoom, setCameraZoom] = useState(1);
 
-  const ZOOM_LEVELS = [0.5, 1, 2, 3] as const;
+  const ZOOM_LEVELS = [1, 2, 3] as const;
 
   // Card corners: TL, TR, BR, BL in image coordinates
   const [cardCorners, setCardCorners] = useState<[Point, Point, Point, Point]>([
@@ -83,7 +83,7 @@ export function PdMeasurement() {
 
   // Drag state
   const [dragging, setDragging] = useState<{
-    type: "corner" | "pupil";
+    type: "corner" | "pan";
     index: number;
   } | null>(null);
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
@@ -122,7 +122,7 @@ export function PdMeasurement() {
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: { facingMode: "user", width: { ideal: 1080 }, height: { ideal: 1920 } },
         audio: false,
       });
       streamRef.current = stream;
@@ -236,20 +236,17 @@ export function PdMeasurement() {
           offsetY: canvasH / 2 - centerY * scale,
         };
       } else if (step === "fine-left" || step === "fine-right") {
-        // Zoom into the eye region
-        const eyePoint =
-          step === "fine-left" ? eyeTaps[0] : eyeTaps[1];
-        if (!eyePoint) return;
+        // Zoom into the eye region, centered on current pupil position
+        const pupilPoint = step === "fine-left" ? leftPupil : rightPupil;
 
-        // Show a region ~15% of image width around the eye
+        // Show a region ~15% of image width around the pupil
         const regionW = iw * 0.15;
-        const regionH = regionW * (canvasH / canvasW);
         const scale = canvasW / regionW;
 
         transformRef.current = {
           scale,
-          offsetX: canvasW / 2 - eyePoint.x * scale,
-          offsetY: canvasH / 2 - eyePoint.y * scale,
+          offsetX: canvasW / 2 - pupilPoint.x * scale,
+          offsetY: canvasH / 2 - pupilPoint.y * scale,
         };
       } else if (step === "result") {
         // Fit entire image
@@ -261,7 +258,7 @@ export function PdMeasurement() {
         };
       }
     },
-    [step, imgSize, eyeTaps, cardCorners, fineCornerZoom],
+    [step, imgSize, eyeTaps, cardCorners, fineCornerZoom, leftPupil, rightPupil],
   );
 
   // --- Drawing ---
@@ -371,12 +368,9 @@ export function PdMeasurement() {
         const cp = imageToCanvas(tap.x, tap.y);
         drawCrosshair(ctx, cp.x, cp.y, "rgba(0,200,255,0.9)", 12);
       }
-    } else if (step === "fine-left") {
-      const cp = imageToCanvas(leftPupil.x, leftPupil.y);
-      drawFineCrosshair(ctx, cp.x, cp.y, estimateIrisRadiusPx());
-    } else if (step === "fine-right") {
-      const cp = imageToCanvas(rightPupil.x, rightPupil.y);
-      drawFineCrosshair(ctx, cp.x, cp.y, estimateIrisRadiusPx());
+    } else if (step === "fine-left" || step === "fine-right") {
+      // Crosshair fixed at canvas center; user drags the image underneath
+      drawFineCrosshair(ctx, w / 2, h / 2, estimateIrisRadiusPx());
     } else if (step === "result" && pdResult !== null) {
       // Draw line between pupils
       const lp = imageToCanvas(leftPupil.x, leftPupil.y);
@@ -595,16 +589,10 @@ export function PdMeasurement() {
       }
 
       if (step === "fine-left" || step === "fine-right") {
-        const pupilPos =
-          step === "fine-left" ? leftPupil : rightPupil;
-        const cp = imageToCanvas(pupilPos.x, pupilPos.y);
-        const dx = pos.x - cp.x;
-        const dy = pos.y - cp.y;
-        if (dx * dx + dy * dy < (CROSSHAIR_RADIUS + 16) ** 2) {
-          setDragging({ type: "pupil", index: step === "fine-left" ? 0 : 1 });
-          dragOffsetRef.current = { x: dx, y: dy };
-          canvasRef.current?.setPointerCapture(e.pointerId);
-        }
+        setDragging({ type: "pan", index: 0 });
+        dragOffsetRef.current = { x: pos.x, y: pos.y };
+        canvasRef.current?.setPointerCapture(e.pointerId);
+        return;
       }
     },
     [step, cardCorners, eyeTaps, leftPupil, rightPupil, getCanvasPos, imageToCanvas, canvasToImage],
@@ -626,9 +614,14 @@ export function PdMeasurement() {
           next[dragging.index] = imgPos;
           return next;
         });
-      } else if (dragging.type === "pupil") {
-        if (dragging.index === 0) setLeftPupil(imgPos);
-        else setRightPupil(imgPos);
+      } else if (dragging.type === "pan") {
+        // Pan the image: compute pointer delta, move pupil in opposite direction
+        const dx = pos.x - dragOffsetRef.current.x;
+        const dy = pos.y - dragOffsetRef.current.y;
+        dragOffsetRef.current = { x: pos.x, y: pos.y };
+        const scale = transformRef.current.scale;
+        const setter = step === "fine-left" ? setLeftPupil : setRightPupil;
+        setter((prev) => ({ x: prev.x - dx / scale, y: prev.y - dy / scale }));
       }
     },
     [dragging, getCanvasPos, canvasToImage],
@@ -799,7 +792,7 @@ export function PdMeasurement() {
       </div>
 
       {/* Bottom controls */}
-      <footer className="flex items-center justify-between gap-3 border-t bg-background px-4 py-3">
+      <footer className="flex items-center justify-between gap-3 border-t bg-background px-4 py-3" style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}>
         {step === "capture" ? (
           <div className="flex w-full flex-col items-center gap-3">
             {/* Zoom selector */}
