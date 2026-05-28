@@ -58,9 +58,7 @@ export function PdMeasurement() {
   const [step, setStep] = useState<Step>("capture");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [cameraZoom, setCameraZoom] = useState(1);
-
-  const ZOOM_LEVELS = [1, 2, 3] as const;
+  const cameraZoom = 2.8;
 
   // Card corners: TL, TR, BR, BL in image coordinates
   const [cardCorners, setCardCorners] = useState<[Point, Point, Point, Point]>([
@@ -794,33 +792,15 @@ export function PdMeasurement() {
       {/* Bottom controls */}
       <footer className="flex items-center justify-between gap-3 border-t bg-background px-4 py-3" style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom, 0px))" }}>
         {step === "capture" ? (
-          <div className="flex w-full flex-col items-center gap-3">
-            {/* Zoom selector */}
-            <div className="flex items-center gap-1 rounded-full bg-muted/60 px-1 py-0.5 backdrop-blur-sm">
-              {ZOOM_LEVELS.map((z) => (
-                <button
-                  key={z}
-                  onClick={() => setCameraZoom(z)}
-                  className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition-colors ${
-                    cameraZoom === z
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  {z === 1 ? "1x" : z < 1 ? `.${String(z).split(".")[1]}` : `${z}x`}
-                </button>
-              ))}
-            </div>
-            <Button
-              size="lg"
-              className="rounded-full px-8"
-              onClick={capturePhoto}
-              disabled={!cameraReady}
-            >
-              <Camera className="mr-2 h-5 w-5" />
-              Capture
-            </Button>
-          </div>
+          <Button
+            size="lg"
+            className="rounded-full px-8"
+            onClick={capturePhoto}
+            disabled={!cameraReady}
+          >
+            <Camera className="mr-2 h-5 w-5" />
+            Capture
+          </Button>
         ) : step === "result" ? (
           <>
             <Button variant="outline" onClick={goBack}>
